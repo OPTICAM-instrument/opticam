@@ -955,6 +955,14 @@ def plot_noise(
             results['measured_mags'],
             results['measured_noise'] / results['expected_measured_noise'],
         )
+        axes[1][i].fill_between(
+            axes[1][i].set_xlim(),
+            [1.05, 1.05],
+            [.95, .95],
+            color='grey',
+            edgecolor='none',
+            alpha=.5,
+            )
         
         axes[0][i].set_yscale('log')
         axes[0][i].set_ylabel('$\\sigma_{\\rm mag}$', fontsize='large')
