@@ -1,4 +1,3 @@
-from astropy import units as u
 import matplotlib.colors as mcolors
 import numpy as np
 
@@ -46,4 +45,4 @@ catalog_colors.pop(catalog_colors.index("tab:gray"))
 catalog_colors.pop(catalog_colors.index("tab:purple"))
 catalog_colors.pop(catalog_colors.index("tab:blue"))
 
-n_read = 1.1 * u.adu / u.pix  # Andor Zyla 4.2 PLUS read noise @ 216 MHz
+n_read = 1.1  # [electrons/pixel] Andor Zyla 4.2 PLUS read noise @ 216 MHz
