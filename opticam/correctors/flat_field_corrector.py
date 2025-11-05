@@ -257,6 +257,3 @@ def read_master_flats(
             master_flats[fltr] = np.asarray(hdu.data)
     
     return master_flats
-
-
-
