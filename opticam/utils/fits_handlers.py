@@ -40,8 +40,7 @@ def get_header_info(
     """
     
     try:
-        with fits.open(file) as hdul:
-            header = hdul[0].header
+        header = get_header(file)
         
         binning = header["BINNING"]
         gain = header["GAIN"]
@@ -129,9 +128,10 @@ def get_data(
     flat_corrector: FlatFieldCorrector | None,
     rebin_factor: int,
     remove_cosmic_rays: bool,
-    ) -> NDArray:
+    ) -> Tuple[NDArray, float]:
     """
-    Get the image data from a FITS file.
+    Get the image data from a FITS file. The dark current "flux" contribution is automatically computed and subtracted
+    from the returned image.
     
     Parameters
     ----------
@@ -146,8 +146,9 @@ def get_data(
     
     Returns
     -------
-    NDArray
-        The data.
+    Tuple[NDArray, float]
+        The image data (after subtracting the dark current "flux" contribution) and the dark current "flux"
+        contribution.
     
     Raises
     ------
@@ -159,20 +160,51 @@ def get_data(
         with fits.open(file) as hdul:
             data = np.array(hdul[0].data, dtype=np.float64)
             fltr = hdul[0].header["FILTER"] + '-band'
+            dark_curr = float(hdul[0].header["DARKCURR"])  # [electrons/pixel/s]
+            t_exp = float(hdul[0].header['EXPOSURE'])  # [s]
     except Exception as e:
-        raise ValueError(f"[OPTICAM] Could not open file {file} due to the following exception: {e}.")
+        raise ValueError(f"[OPTICAM] Could not get image data from {file} due to the following exception: {e}.")
+    
+    # subtract dark current
+    dark_flux = dark_curr * t_exp
+    data -= dark_flux
     
     if flat_corrector:
         data = flat_corrector.correct(data, fltr)
     
-    # remove cosmic rays if required
     if remove_cosmic_rays:
         data = np.asarray(cosmicray_lacosmic(data, gain_apply=False)[0])
     
     if rebin_factor > 1:
         data = rebin_image(data, rebin_factor)
     
-    return data
+    return data, dark_flux
+
+
+def get_header(
+    file: str,
+    ) -> fits.Header:
+    """
+    Get the header of a FITS file.
+    
+    Parameters
+    ----------
+    file : str
+        _description_
+
+    Returns
+    -------
+    fits.Header
+        _description_
+    """
+    
+    try:
+        with fits.open(file) as hdul:
+            header = hdul[0].header
+    except Exception as e:
+        raise ValueError(f"[OPTICAM] Could not get header information from {file} due to the following exception: {e}.")
+    
+    return header
 
 
 def save_stacked_images(
@@ -236,7 +268,7 @@ def get_stacked_images(
 
 def get_image_noise_info(
     file_path: str,
-    ) -> Tuple[NDArray, Quantity, Quantity, Quantity]:
+    ) -> Tuple[NDArray, float, float]:
     """
     Given a FITS file, get the image and corresponding filter, exposure time, dark current, and gain.
     
@@ -247,25 +279,20 @@ def get_image_noise_info(
     
     Returns
     -------
-    Tuple[NDArray, Quantity, Quantity, Quantity]
-        The image, exposure time, dark current, and gain.
-    
-    Raises
-    ------
-    ValueError
-        If the file could not be parsed.
+    Tuple[NDArray, float, Quantity]
+        The image, dark flux, and gain.
     """
     
-    try:
-        with fits.open(file_path) as hdul:
-            img = np.array(hdul[0].data, dtype=np.float64)  # type: ignore
-            t_exp = float(hdul[0].header['EXPOSURE']) * u.s  # type: ignore
-            dark_curr = float(hdul[0].header['DARKCURR']) * u.adu / u.pix / u.s  # type: ignore
-            gain = float(hdul[0].header['GAIN']) * u.ph / u.adu  # type: ignore
-    except Exception as e:
-        raise ValueError(f"[OPTICAM] Could not parse file {file_path} due to the following exception: {e}.")
+    gain = float(get_header(file=file_path)['GAIN'])  # type: ignore
     
-    return img, t_exp, dark_curr, gain
+    img, dark_flux = get_data(
+        file=file_path,
+        flat_corrector=None,
+        rebin_factor=1,
+        remove_cosmic_rays=False,
+        )
+    
+    return img, dark_flux, gain
 
 
 
