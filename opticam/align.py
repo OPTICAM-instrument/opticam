@@ -108,7 +108,7 @@ def align_batch(
             flat_corrector=flat_corrector,
             rebin_factor=rebin_factor,
             remove_cosmic_rays=remove_cosmic_rays,
-            )
+            )[0]
         
         # calculate and subtract background
         bkg = background(data)

@@ -370,14 +370,12 @@ class Reducer:
                 continue
             
             # get reference image
-            reference_image = np.asarray(
-                get_data(
-                    file=self.reference_files[fltr],
-                    flat_corrector=self.flat_corrector,
-                    rebin_factor=self.rebin_factor,
-                    remove_cosmic_rays=self.remove_cosmic_rays,
-                    )
-                )
+            reference_image = get_data(
+                file=self.reference_files[fltr],
+                flat_corrector=self.flat_corrector,
+                rebin_factor=self.rebin_factor,
+                remove_cosmic_rays=self.remove_cosmic_rays,
+                )[0]
             
             try:
                 # get source coordinates in descending order of brightness
