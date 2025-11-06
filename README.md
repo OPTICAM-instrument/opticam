@@ -15,7 +15,7 @@ A Python package for reducing OPTICAM data.
 You can install the latest stable release of `opticam` directly from GitHub using:
 
 ```
-pip install git+https://github.com/zairving/opticam.git
+pip install git+https://github.com/OPTICAM-instrument/opticam.git
 ```
 
 ### Locally
