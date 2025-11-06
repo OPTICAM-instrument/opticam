@@ -9,7 +9,6 @@ from matplotlib.figure import Figure
 import numpy as np
 from numpy.typing import NDArray
 import pandas as pd
-from pandas import DataFrame
 
 from opticam.background.global_background import BaseBackground
 from opticam.noise import characterise_noise, get_snrs
@@ -202,8 +201,6 @@ def plot_time_between_files(
 def plot_backgrounds(
     out_directory: str,
     camera_files: Dict[str, List[str]],
-    background_median: Dict[str, Dict[str, NDArray]],
-    background_rms: Dict[str, Dict[str, NDArray]],
     bmjds: Dict[str, float],
     t_ref: float,
     show: bool,
@@ -249,18 +246,16 @@ def plot_backgrounds(
         if len(files) == 0:
             continue
         
-        # get values from background_median and background_rms dicts
-        backgrounds = list(background_median[fltr].values())
-        rmss = list(background_rms[fltr].values())
+        df = pd.read_csv(os.path.join(out_directory, f'diag/{fltr}_background.csv'))
         
         # match times to background_median and background_rms keys
-        t = np.array([bmjds[file] for file in files if file in background_median[fltr]])
+        t = np.array([bmjds[file] for file in df['file']])
         plot_times = (t - t_ref) * 86400  # convert time to seconds from first observation
         
         if len(camera_files) == 1:
             axs[0].set_title(fltr)
-            axs[0].plot(plot_times, backgrounds, "k.", ms=2)
-            axs[1].plot(plot_times, rmss, "k.", ms=2)
+            axs[0].plot(plot_times, df['median'].values, "k.", ms=2)
+            axs[1].plot(plot_times, df['rms'].values, "k.", ms=2)
             
             axs[1].set_xlabel(f"Time from BMJD {t_ref:.4f} [s]")
             axs[0].set_ylabel("Median background RMS")
@@ -268,21 +263,14 @@ def plot_backgrounds(
         else:
             # plot background
             axs[0, list(camera_files.keys()).index(fltr)].set_title(fltr)
-            axs[0, list(camera_files.keys()).index(fltr)].plot(plot_times, backgrounds, "k.", ms=2)
-            axs[1, list(camera_files.keys()).index(fltr)].plot(plot_times, rmss, "k.", ms=2)
+            axs[0, list(camera_files.keys()).index(fltr)].plot(plot_times, df['median'].values, "k.", ms=2)
+            axs[1, list(camera_files.keys()).index(fltr)].plot(plot_times, df['rms'].values, "k.", ms=2)
             
             for col in range(len(camera_files)):
                 axs[1, col].set_xlabel(f"Time from BMJD {t_ref:.4f} [s]")
             
             axs[0, 0].set_ylabel("Median background")
             axs[1, 0].set_ylabel("Median background RMS")
-        
-        # write background to file
-        DataFrame({
-            'BMJD': t,
-            'RMS': backgrounds,
-            'median': rmss
-        }).to_csv(os.path.join(out_directory, f'diag/{fltr}_background.csv'), index=False)
     
     for ax in axs.flatten():
         ax.minorticks_on()

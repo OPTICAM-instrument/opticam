@@ -263,11 +263,12 @@ class Reducer:
         ########################################### read catalogs ###########################################
         
         for fltr in list(self.camera_files.keys()):
-            if os.path.isfile(os.path.join(self.out_directory, f"cat/{fltr}_catalog.ecsv")):
+            file_path = os.path.join(self.out_directory, f"cat/{fltr}_catalog.ecsv")
+            if os.path.isfile(file_path):
                 self.catalogs.update(
                     {
                         fltr: QTable.read(
-                            os.path.join(self.out_directory, f"cat/{fltr}_catalog.ecsv"),
+                            file_path,
                             format="ascii.ecsv",
                             )
                         }
@@ -278,6 +279,17 @@ class Reducer:
                     )
                 if self.verbose:
                     print(f"[OPTICAM] Read {fltr} catalog from file.")
+        
+        ########################################### read unaligned files ###########################################
+        
+        file_path = os.path.join(self.out_directory, 'diag/unaligned_files.txt')
+        if os.path.isfile(file_path):
+            with open(file_path, 'r') as file:
+                for line in file:
+                    self.unaligned_files.append(line)
+            
+            if self.verbose:
+                    print(f"[OPTICAM] Read unaligned files from file.")
 
     def create_catalogs(
         self,
@@ -288,7 +300,6 @@ class Reducer:
         translation_limit: float | int | List[float | int] | None = None,
         scale_limit: float | None = None,
         overwrite: bool = False,
-        show_diagnostic_plots: bool = False,
         ) -> None:
         """
         Initialise the source catalogs for each camera. Some aspects of this method are parallelised for speed.
@@ -317,9 +328,6 @@ class Reducer:
             x-translation limit and the second value defines the y-translation limit.
         overwrite : bool, optional
             Whether to overwrite existing catalogs, by default False.
-        show_diagnostic_plots : bool, optional
-            Whether to show diagnostic plots, by default False. Diagnostic plots are saved to out_directory, so this
-            parameter only affects whether the plots are displayed in the console.
         """
         
         assert transform_type in ['affine', 'translation'], '[OPTICAM] transform_type must be either "affine" or "translation".'
@@ -346,8 +354,6 @@ class Reducer:
         if self.verbose:
             print('[OPTICAM] Creating source catalogs')
         
-        background_median = {}
-        background_rms = {}
         stacked_images = {}
         
         instance_align_batch = partial(
@@ -417,14 +423,19 @@ class Reducer:
                 tqdm_class=tqdm,
                 )
             
-            self.transforms, self.unaligned_files, stacked_image, background_median[fltr], background_rms[fltr] = \
-                parse_alignment_results(
-                    results=results,
-                    camera_files=self.camera_files[fltr],
-                    transforms=self.transforms,
-                    unaligned_files=self.unaligned_files,
-                    verbose=self.verbose,
-                    )
+            self.transforms, self.unaligned_files, stacked_image, background = parse_alignment_results(
+                results=results,
+                camera_files=self.camera_files[fltr],
+                transforms=self.transforms,
+                unaligned_files=self.unaligned_files,
+                verbose=self.verbose,
+                )
+            
+            # save background to CSV file
+            # TODO: add BMJD column to background CSV
+            df = pd.DataFrame.from_dict(background, orient='index').reset_index()
+            df.columns = ['file', 'median', 'rms']
+            df.to_csv(os.path.join(self.out_directory, f'diag/{fltr}_background.csv'), index=False)
             
             try:
                 # estimate threshold for source detection
@@ -449,7 +460,7 @@ class Reducer:
             # save stacked image
             stacked_images[fltr] = stacked_image
             
-            # limit catalog to brightest max_catalog_sources sources
+            # limit catalog to brightest sources
             tbl = tbl[:max_catalog_sources]
             
             # save catalog
@@ -486,44 +497,6 @@ class Reducer:
             overwrite=overwrite,
             )
         
-        plot_backgrounds(
-            out_directory=self.out_directory,
-            camera_files=self.camera_files,
-            background_median=background_median,
-            background_rms=background_rms,
-            bmjds=self.bmjds,
-            t_ref=self.t_ref,
-            show=show_diagnostic_plots,
-            save=True,
-            )
-        
-        plot_background_meshes(
-            out_directory=self.out_directory,
-            filters=list(self.camera_files.keys()),
-            stacked_images=stacked_images,
-            background=self.background,
-            show=show_diagnostic_plots,
-            save=True,
-            )
-        
-        plot_snrs(
-            out_directory=self.out_directory,
-            files=self.reference_files,
-            background=self.background,
-            psf_params=self.psf_params,
-            catalogs=self.catalogs,
-            show=self.show_plots,
-        )
-        
-        plot_noise(
-            out_directory=self.out_directory,
-            files=self.reference_files,
-            background=self.background,
-            psf_params=self.psf_params,
-            catalogs=self.catalogs,
-            show=self.show_plots,
-            )
-        
         # save transforms to file
         if not os.path.isfile(os.path.join(self.out_directory, "cat/transforms.json")) or overwrite:
             with open(os.path.join(self.out_directory, "cat/transforms.json"), "w") as file:
@@ -534,6 +507,33 @@ class Reducer:
             with open(os.path.join(self.out_directory, "diag/unaligned_files.txt"), "w") as unaligned_file:
                 for file in self.unaligned_files:
                     unaligned_file.write(file + "\n")
+
+    def plot_backgrounds(self) -> None:
+        """
+        Plot the median backgrounds for each filter.
+        """
+        
+        plot_backgrounds(
+            out_directory=self.out_directory,
+            camera_files=self.camera_files,
+            bmjds=self.bmjds,
+            t_ref=self.t_ref,
+            show=self.show_plots,
+            save=True,
+            )
+
+    def plot_background_meshes(self) -> None:
+        
+        stacked_images = get_stacked_images(self.out_directory)
+        
+        plot_background_meshes(
+            out_directory=self.out_directory,
+            filters=list(self.camera_files.keys()),
+            stacked_images=stacked_images,
+            background=self.background,
+            show=self.show_plots,
+            save=True,
+            )
 
     def plot_growth_curves(
         self,
@@ -635,6 +635,38 @@ class Reducer:
                     b=b,
                     out_directory=self.out_directory,
                 )
+
+    def plot_snrs(
+        self,
+        ) -> None:
+        """
+        Plot the signal-to-noise ratios for each catalogued source in the reference images.
+        """
+        
+        plot_snrs(
+            out_directory=self.out_directory,
+            files=self.reference_files,
+            background=self.background,
+            psf_params=self.psf_params,
+            catalogs=self.catalogs,
+            show=self.show_plots,
+        )
+
+    def plot_noise(
+        self,
+        ) -> None:
+        """
+        Plot the noise characterisation for each reference image.
+        """
+        
+        plot_noise(
+            out_directory=self.out_directory,
+            files=self.reference_files,
+            background=self.background,
+            psf_params=self.psf_params,
+            catalogs=self.catalogs,
+            show=self.show_plots,
+            )
 
     def create_gifs(self, keep_frames: bool = True, overwrite: bool = False) -> None:
         """
@@ -861,7 +893,7 @@ def parse_alignment_results(
     transforms: Dict[str, List[float]],
     unaligned_files: List[str],
     verbose: bool,
-    ) -> Tuple[Dict[str, List[float]], List[str], NDArray, Dict[str, float], Dict[str, float]]:
+    ) -> Tuple[Dict[str, List[float]], List[str], NDArray, Dict[str, Dict[str, float]]]:
     """
     Parse the alignment results.
     
@@ -887,17 +919,15 @@ def parse_alignment_results(
     
     fltr_transforms = {}
     fltr_unaligned_files = []
-    fltr_background_medians = {}
-    fltr_background_rmss = {}
+    fltr_background = {}
     
     # unpack results
-    batch_stacked_images, batch_transforms, batch_background_medians, batch_background_rmss = zip(*results)
+    batch_stacked_images, batch_transforms, batch_backgrounds = zip(*results)
     
     # combine results
     for i in range(len(batch_stacked_images)):
         fltr_transforms.update(batch_transforms[i])
-        fltr_background_medians.update(batch_background_medians[i])
-        fltr_background_rmss.update(batch_background_rmss[i])
+        fltr_background.update(batch_backgrounds[i])
     
     aligned_files = list(fltr_transforms.keys())
     for file in camera_files:
@@ -914,7 +944,7 @@ def parse_alignment_results(
         print(f'[OPTICAM] {len(fltr_transforms)} image(s) aligned.')
         print(f'[OPTICAM] {len(fltr_unaligned_files)} image(s) could not be aligned.')
     
-    return transforms, unaligned_files, stacked_image, fltr_background_medians, fltr_background_rmss
+    return transforms, unaligned_files, stacked_image, fltr_background
 
 
 def create_targets_dict(
