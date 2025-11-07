@@ -431,12 +431,6 @@ class Reducer:
                 verbose=self.verbose,
                 )
             
-            # save background to CSV file
-            # TODO: add BMJD column to background CSV
-            df = pd.DataFrame.from_dict(background, orient='index').reset_index()
-            df.columns = ['file', 'median', 'rms']
-            df.to_csv(os.path.join(self.out_directory, f'diag/{fltr}_background.csv'), index=False)
-            
             try:
                 # estimate threshold for source detection
                 threshold = detect_threshold(
@@ -475,6 +469,13 @@ class Reducer:
                 aperture_selector=self.aperture_selector,
                 catalog=self.catalogs[fltr],
                 )
+            
+            save_background(
+                out_directory=self.out_directory,
+                background=background,
+                fltr=fltr,
+                bmjds=self.bmjds,
+                )
         
         log_psf_params(
             out_directory=self.out_directory,
@@ -497,6 +498,13 @@ class Reducer:
             overwrite=overwrite,
             )
         
+        plot_backgrounds(
+            out_directory=self.out_directory,
+            t_ref=self.t_ref,
+            show=self.show_plots,
+            save=True,
+            )
+        
         # save transforms to file
         if not os.path.isfile(os.path.join(self.out_directory, "cat/transforms.json")) or overwrite:
             with open(os.path.join(self.out_directory, "cat/transforms.json"), "w") as file:
@@ -508,31 +516,36 @@ class Reducer:
                 for file in self.unaligned_files:
                     unaligned_file.write(file + "\n")
 
-    def plot_backgrounds(self) -> None:
+    def plot_background_meshes(
+        self,
+        save: bool = False,
+        ) -> None:
         """
-        Plot the median backgrounds for each filter.
+        Plot the background mesh over an image from each filter to verify it's appropriately sized. If stacked catalog
+        images exist, those will be used. Otherwise, a random image will be chosen for each filter.
+        
+        Parameters
+        ----------
+        save : bool, optional
+            Whether to save the plot, by default `False`.
         """
         
-        plot_backgrounds(
-            out_directory=self.out_directory,
-            camera_files=self.camera_files,
-            bmjds=self.bmjds,
-            t_ref=self.t_ref,
-            show=self.show_plots,
-            save=True,
-            )
-
-    def plot_background_meshes(self) -> None:
-        
-        stacked_images = get_stacked_images(self.out_directory)
+        try:
+            images = get_stacked_images(self.out_directory)
+        except FileNotFoundError:
+            images = get_random_image_for_each_filter(self.camera_files)
+            
+            # subtract background
+            for label, image in images.items():
+                bkg = self.background(image)
+                images[label] = image - bkg.background
         
         plot_background_meshes(
             out_directory=self.out_directory,
-            filters=list(self.camera_files.keys()),
-            stacked_images=stacked_images,
+            images=images,
             background=self.background,
             show=self.show_plots,
-            save=True,
+            save=save,
             )
 
     def plot_growth_curves(
@@ -820,6 +833,14 @@ class Reducer:
 def log_reducer_params(
     reducer: Reducer,
     ) -> None:
+    """
+    Log the input parameters of a `Reducer` instance to file.
+    
+    Parameters
+    ----------
+    reducer : Reducer
+        The `Reducer` instance.
+    """
     
     # get parameters
     params = dict(recursive_log(reducer, max_depth=5))
@@ -945,6 +966,73 @@ def parse_alignment_results(
         print(f'[OPTICAM] {len(fltr_unaligned_files)} image(s) could not be aligned.')
     
     return transforms, unaligned_files, stacked_image, fltr_background
+
+
+def save_background(
+    out_directory: str,
+    background: Dict[str, Dict[str, float]],
+    fltr: str,
+    bmjds: Dict[str, float],
+    ) -> None:
+    """
+    Save the median background and its RMS to a CSV file.
+    
+    Parameters
+    ----------
+    out_directory : str
+        The output directory.
+    background : Dict[str, Dict[str, float]]
+        The background values for each file.
+    fltr : str
+        The corresponding filter.
+    bmjds : Dict[str, float]
+        The BMJD values for each file.
+    """
+    
+    df = pd.DataFrame.from_dict(background, orient='index').reset_index()
+    df.columns = ['file', 'median', 'rms']
+    
+    time_df = pd.DataFrame.from_dict(bmjds, orient='index').reset_index()
+    time_df.columns = ['file', 'BMJD']
+    
+    merged_df = pd.merge(df, time_df, on='file', how='inner')  # merge dataframes to get corresponding times
+    merged_df = merged_df.drop('file', axis=1)  # delete file column
+    merged_df = merged_df.reindex(columns=['BMJD', 'median', 'rms'])  # reorder columns
+    
+    merged_df.to_csv(os.path.join(out_directory, f'diag/{fltr}_background.csv'), index=False)
+
+
+def get_random_image_for_each_filter(
+    camera_files: Dict[str, List[str]],
+    ) -> Dict[str, NDArray]:
+    """
+    Choose a random image for each filter from a dictionary.
+    
+    Parameters
+    ----------
+    camera_files : Dict[str, List[str]]
+        The filters and corresponding files in the data directory.
+    
+    Returns
+    -------
+    Dict[str, NDArray]
+        A dictionary containing a random file for each filter
+    """
+    
+    rng = np.random.default_rng()
+    images = {}
+    
+    for files in camera_files.values():
+        file = files[rng.choice(len(files))]  # choose a random file
+        file_name = file.split('/')[-1]  # get file name (final part of the file path)
+        images[file_name] = get_data(
+            file=file,
+            flat_corrector=None,
+            rebin_factor=1,
+            remove_cosmic_rays=False,
+            )[0]
+    
+    return images
 
 
 def create_targets_dict(

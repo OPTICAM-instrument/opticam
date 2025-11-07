@@ -16,6 +16,7 @@ from opticam.photometers import get_growth_curve
 from opticam.fitting.models import gaussian
 from opticam.fitting.routines import fit_rms_vs_flux
 from opticam.utils.constants import catalog_colors, fwhm_scale
+from opticam.utils.helpers import sort_filters
 
 
 def plot_catalogs(
@@ -200,8 +201,6 @@ def plot_time_between_files(
 
 def plot_backgrounds(
     out_directory: str,
-    camera_files: Dict[str, List[str]],
-    bmjds: Dict[str, float],
     t_ref: float,
     show: bool,
     save: bool,
@@ -211,73 +210,70 @@ def plot_backgrounds(
     
     Parameters
     ----------
-    camera_files : Dict[str, str]
-        The files for each camera {fltr: file}.
-    background_median : Dict[str, List]
-        The median background for each camera.
-    background_rms : Dict[str, List]
-        The background RMS for each camera.
-    bmjds : Dict[str, float]
-        The Barycentric MJD dates for each image {file: BMJD}.
+    out_directory : str
+        The directory to which the background files, and where the resulting plot will be saved if `save=True`.
     t_ref : float
         The reference BMJD.
-    out_directory : str
-        The directory to which the resulting files will be saved.
     show: bool
         Whether to display the plot.
     save : bool
         Whether to save the plot.
     """
     
+    diag_files = os.listdir(os.path.join(out_directory, 'diag'))
+    
+    background_files = {}
+    for file in diag_files:
+        if file.endswith('_background.csv'):
+            fltr = file.split('_')[0]
+            background_files[fltr] = os.path.join(out_directory, f'diag/{file}')
+    background_files = sort_filters(background_files)
+    
     fig, axs = plt.subplots(
         nrows=2,
-        ncols=len(camera_files),
+        ncols=len(background_files),
         tight_layout=True,
-        figsize=((2 * len(camera_files) / 3) * 6.4, 2 * 4.8),
+        figsize=(len(background_files) * 6.4, 1.5 * 4.8),
         sharex='col',
+        gridspec_kw={
+            'hspace': 0,
+            },
         )
     
     # for each camera
-    for fltr in list(camera_files.keys()):
-        
-        files = camera_files[fltr]  # get files for camera
-        
-        # skip cameras with no images
-        if len(files) == 0:
-            continue
-        
-        df = pd.read_csv(os.path.join(out_directory, f'diag/{fltr}_background.csv'))
+    for i, (fltr, file) in enumerate(background_files.items()):
+        df = pd.read_csv(file)
         
         # match times to background_median and background_rms keys
-        t = np.array([bmjds[file] for file in df['file']])
+        t = np.asarray(df['BMJD'].values)
         plot_times = (t - t_ref) * 86400  # convert time to seconds from first observation
         
-        if len(camera_files) == 1:
+        if len(background_files) == 1:
             axs[0].set_title(fltr)
             axs[0].plot(plot_times, df['median'].values, "k.", ms=2)
             axs[1].plot(plot_times, df['rms'].values, "k.", ms=2)
             
-            axs[1].set_xlabel(f"Time from BMJD {t_ref:.4f} [s]")
-            axs[0].set_ylabel("Median background RMS")
-            axs[1].set_ylabel("Median background")
+            axs[1].set_xlabel(f"Time from BMJD {t_ref:.4f} [s]", fontsize='large')
+            axs[0].set_ylabel("Median background RMS", fontsize='large')
+            axs[1].set_ylabel("Median background", fontsize='large')
         else:
             # plot background
-            axs[0, list(camera_files.keys()).index(fltr)].set_title(fltr)
-            axs[0, list(camera_files.keys()).index(fltr)].plot(plot_times, df['median'].values, "k.", ms=2)
-            axs[1, list(camera_files.keys()).index(fltr)].plot(plot_times, df['rms'].values, "k.", ms=2)
+            axs[0, i].set_title(fltr, fontsize='large')
+            axs[0, i].plot(plot_times, df['median'].values, "k.", ms=2)
+            axs[1, i].plot(plot_times, df['rms'].values, "k.", ms=2)
             
-            for col in range(len(camera_files)):
-                axs[1, col].set_xlabel(f"Time from BMJD {t_ref:.4f} [s]")
+            for col in range(len(background_files)):
+                axs[1, col].set_xlabel(f"Time from BMJD {t_ref:.4f} [s]", fontsize='large')
             
-            axs[0, 0].set_ylabel("Median background")
-            axs[1, 0].set_ylabel("Median background RMS")
+            axs[0, 0].set_ylabel("Median background", fontsize='large')
+            axs[1, 0].set_ylabel("Median background RMS", fontsize='large')
     
     for ax in axs.flatten():
         ax.minorticks_on()
         ax.tick_params(which="both", direction="in", top=True, right=True)
     
     if save:
-        fig.savefig(os.path.join(out_directory, "diag/background.png"))
+        fig.savefig(os.path.join(out_directory, "diag/background.pdf"))
     
     if show:
         plt.show()
@@ -288,47 +284,65 @@ def plot_backgrounds(
 
 def plot_background_meshes(
     out_directory: str,
-    filters: List[str],
-    stacked_images: Dict[str, NDArray],
+    images: Dict[str, NDArray],
     background: BaseBackground,
     show: bool,
     save: bool,
     ) -> None:
     """
-    Plot the background meshes on top of the catalog images.
+    Plot the background mesh on top of some images.
     
     Parameters
     ----------
-    stacked_images : Dict[str, NDArray]
-        The stacked images for each camera.
+    out_directory : str
+        The path to the output directory.
+    images : Dict[str, NDArray]
+        The images. The keys should give the filters (or file names) and the values should be the images.
+    background: BaseBackground
+        The background estimator.
     show : bool
-        Whether to display the plot.
+        Whether to show the plot.
+    save : bool
+        Whether to save the plot.
     """
     
-    ncols = len(filters)
+    ncols = len(images)
     fig, axes = plt.subplots(ncols=ncols, tight_layout=True, figsize=(ncols * 5, 5))
     
     if ncols == 1:
         # convert axes to list
         axes = [axes]
     
-    for i, fltr in enumerate(filters):
+    for i, (label, image) in enumerate(images.items()):
         
-        plot_image = np.clip(stacked_images[fltr], 0, None)
-        bkg = background(stacked_images[fltr])
+        # clip negative values
+        plot_image = np.clip(image, 0., None)
+        
+        bkg = background(image)
         
         # plot background mesh
-        axes[i].imshow(plot_image, origin="lower", cmap="Greys", interpolation="nearest",
-                        norm=simple_norm(plot_image, stretch="log"))
-        bkg.plot_meshes(ax=axes[i], outlines=True, marker='.', color='red', alpha=0.3)
+        axes[i].imshow(
+            plot_image,
+            origin="lower",
+            cmap="Greys",
+            interpolation="nearest",
+            norm=simple_norm(plot_image, stretch="log"),
+            )
+        bkg.plot_meshes(
+            ax=axes[i],
+            outlines=True,
+            marker='.',
+            color='red',
+            alpha=0.3,
+            )
         
         #label plot
-        axes[i].set_title(fltr)
+        axes[i].set_title(label)
         axes[i].set_xlabel("X")
         axes[i].set_ylabel("Y")
     
     if save:
-        fig.savefig(os.path.join(out_directory, "diag/background_meshes.png"))
+        fig.savefig(os.path.join(out_directory, 'diag/background_meshes.pdf'))
     
     if show:
         plt.show(fig)
