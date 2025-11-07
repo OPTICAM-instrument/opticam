@@ -229,7 +229,7 @@ def plot_backgrounds(
             background_files[fltr] = os.path.join(out_directory, f'diag/{file}')
     background_files = sort_filters(background_files)
     
-    fig, axs = plt.subplots(
+    fig, axes = plt.subplots(
         nrows=2,
         ncols=len(background_files),
         tight_layout=True,
@@ -249,28 +249,28 @@ def plot_backgrounds(
         plot_times = (t - t_ref) * 86400  # convert time to seconds from first observation
         
         if len(background_files) == 1:
-            axs[0].set_title(fltr)
-            axs[0].plot(plot_times, df['median'].values, "k.", ms=2)
-            axs[1].plot(plot_times, df['rms'].values, "k.", ms=2)
+            axes[0].set_title(fltr)
+            axes[0].plot(plot_times, df['median'].values, "k.", ms=2)
+            axes[1].plot(plot_times, df['rms'].values, "k.", ms=2)
             
-            axs[1].set_xlabel(f"Time from BMJD {t_ref:.4f} [s]", fontsize='large')
-            axs[0].set_ylabel("Median background RMS", fontsize='large')
-            axs[1].set_ylabel("Median background", fontsize='large')
+            axes[1].set_xlabel(f"Time from BMJD {t_ref:.4f} [s]", fontsize='large')
+            axes[0].set_ylabel("Median background RMS", fontsize='large')
+            axes[1].set_ylabel("Median background", fontsize='large')
         else:
             # plot background
-            axs[0, i].set_title(fltr, fontsize='large')
-            axs[0, i].plot(plot_times, df['median'].values, "k.", ms=2)
-            axs[1, i].plot(plot_times, df['rms'].values, "k.", ms=2)
+            axes[0, i].set_title(fltr, fontsize='large')
+            axes[0, i].plot(plot_times, df['median'].values, "k.", ms=2)
+            axes[1, i].plot(plot_times, df['rms'].values, "k.", ms=2)
             
             for col in range(len(background_files)):
-                axs[1, col].set_xlabel(f"Time from BMJD {t_ref:.4f} [s]", fontsize='large')
-            
-            axs[0, 0].set_ylabel("Median background", fontsize='large')
-            axs[1, 0].set_ylabel("Median background RMS", fontsize='large')
+                axes[1, col].set_xlabel(f"Time from BMJD {t_ref:.4f} [s]", fontsize='large')
     
-    for ax in axs.flatten():
+    for ax in axes.flatten():
         ax.minorticks_on()
         ax.tick_params(which="both", direction="in", top=True, right=True)
+    
+    axes[0, 0].set_ylabel("Median background", fontsize='large')
+    axes[1, 0].set_ylabel("Median background RMS", fontsize='large')
     
     if save:
         fig.savefig(os.path.join(out_directory, "diag/background.pdf"))
@@ -970,11 +970,9 @@ def plot_noise(
             )
         
         axes[0][i].set_yscale('log')
-        axes[0][i].set_ylabel('$\\sigma_{\\rm mag}$', fontsize='large')
         axes[0][i].set_title(fltr, fontsize='large')
         
         axes[1][i].set_xlabel('-2.5 log(counts)', fontsize='large')
-        axes[1][i].set_ylabel('$\\frac{\\sigma_{\\rm measured}}{\\sigma_{\\rm expected}}$', fontsize='xx-large')
     
     for ax in axes.flatten():
         ax.minorticks_on()
@@ -982,6 +980,9 @@ def plot_noise(
     
     for ax in axes[0, :]:
         ax.invert_xaxis()
+    
+    axes[0, 0].set_ylabel('$\\sigma_{\\rm mag}$', fontsize='large')
+    axes[1, 0].set_ylabel('$\\frac{\\sigma_{\\rm measured}}{\\sigma_{\\rm expected}}$', fontsize='xx-large')
     
     fig.legend(
         *axes[0, 0].get_legend_handles_labels(),
