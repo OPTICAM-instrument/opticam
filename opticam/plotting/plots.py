@@ -398,16 +398,19 @@ def plot_growth_curves(
         sharey='row',
     )
     
-    if n > 1:
+    if rows > 1 and cols > 1:
         for row in axes:
             row[0].set_ylabel('Flux [%]', fontsize='large')
+    elif cols > 1:
+        for col in axes:
+            col.set_ylabel('Flux [%]', fontsize='large')
     else:
         axes.set_ylabel('Flux [%]', fontsize='large')
     
     axes = np.asarray([axes]).flatten()
     
     for target in targets:
-        i = target - 1  # index is just target ID - 1
+        i = targets.index(target)
         
         radii, fluxes = get_growth_curve(
             image=image,
@@ -429,7 +432,7 @@ def plot_growth_curves(
         secax.minorticks_on()
         secax.tick_params(which='both', direction='in')
         
-        axes[i].set_title(f'Source {i + 1}', fontsize='large')
+        axes[i].set_title(f'Source {target}', fontsize='large')
         axes[i].set_xlabel('Radius [pixels]', fontsize='large')
         
         axes[i].minorticks_on()
