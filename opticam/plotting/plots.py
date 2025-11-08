@@ -3,16 +3,17 @@ from typing import Callable, Dict, List
 
 from astropy.table import QTable
 from astropy.visualization import simple_norm
-from matplotlib.patches import Circle, Ellipse
+from matplotlib.patches import Circle, Ellipse, Rectangle
 from matplotlib import pyplot as plt
 from matplotlib.figure import Figure
 import numpy as np
 from numpy.typing import NDArray
 import pandas as pd
+from photutils.aperture import ApertureStats, BoundingBox
 
 from opticam.background.global_background import BaseBackground
 from opticam.noise import characterise_noise, get_snrs
-from opticam.photometers import get_growth_curve
+from opticam.photometers import AperturePhotometer, get_growth_curve
 from opticam.fitting.models import gaussian
 from opticam.fitting.routines import fit_rms_vs_flux
 from opticam.utils.constants import catalog_colors, fwhm_scale
@@ -1003,7 +1004,253 @@ def plot_noise(
         plt.close(fig)
 
 
+def plot_apertures(
+    out_directory: str,
+    data: NDArray,
+    cat: QTable,
+    targets: List[int] | int,
+    photometer: AperturePhotometer,
+    psf_params: Dict[str, float],
+    fltr: str,
+    show: bool,
+    save: bool,
+    ):
+    """
+    Plot the specified aperture over each target source.
+    
+    Parameters
+    ----------
+    out_directory : str
+        The output directory. Used to save the plot if `save=True`.
+    data : NDArray
+        The image data.
+    cat : QTable
+        The source catalog.
+    targets : List[int] | int
+        The target IDs to plot apertures for.
+    photometer : AperturePhotometer
+        The `AperturePhotometer` instance.
+    psf_params : Dict[str, float]
+        The PSF parameters.
+    fltr : str
+        The image filter.
+    show : bool
+        Whether to show the plot.
+    save : bool
+        Whether to save the plot. If true, the plot is saved to `out_directory/diag/apertures/fltr_apertures.pdf`.
+    """
+    
+    if isinstance(targets, int):
+        targets = [targets]
+    
+    n = len(targets)
+    ncols = int(np.ceil(np.sqrt(n)))
+    nrows = int(np.ceil(n / ncols))
+    
+    fig, axes = plt.subplots(
+        nrows=nrows,
+        ncols=ncols,
+        figsize=(ncols * 3, nrows * 3),
+        tight_layout=True,
+    )
+    
+    axes = np.asarray([axes]).flatten()
+    
+    region_size = get_max_region_size(
+        targets=targets,
+        photometer=photometer,
+        data=data,
+        cat=cat,
+        psf_params=psf_params,
+    )
+    
+    for target in targets:
+        i = targets.index(target)
+        position = [cat['xcentroid'][i], cat['ycentroid'][i]]
+        
+        aperture = photometer.get_aperture(
+            position=position,
+            psf_params=psf_params,
+            )
+        
+        if photometer.local_background_estimator is not None:
+            annulus_stats = photometer.local_background_estimator.get_stats(
+                data=data,
+                position=position,
+                semimajor_axis=psf_params['semimajor_sigma'],
+                semiminor_axis=psf_params['semiminor_sigma'],
+                theta=psf_params['orientation'],
+                )
+            bbox = annulus_stats.bbox
+            
+            padding = region_size // 10
+        else:
+            aperture_stats = ApertureStats(
+                data=data,
+                aperture=aperture,
+            )
+            bbox = aperture_stats.bbox
+            
+            padding = region_size // 4
+        
+        ixmin = max(0, bbox.ixmin - padding)
+        ixmax = min(data.shape[1], bbox.ixmin + region_size + padding)
+        dx = bbox.ixmin - ixmin
+        
+        iymin = max(0, bbox.iymin - padding)
+        iymax = min(data.shape[0], bbox.iymin + region_size + padding)
+        dy = bbox.iymin - iymin
+        
+        bbox = BoundingBox(
+            ixmin=ixmin,
+            ixmax=ixmax,
+            iymin=iymin,
+            iymax=iymax,
+            )
+        
+        # get region of interest
+        region = data[bbox.iymin:bbox.iymax, bbox.ixmin:bbox.ixmax]
+        centre = [position[0] - bbox.ixmin, position[1] - bbox.iymin]  # centre of region
+        
+        axes[i].imshow(region, origin='lower', cmap='Greys', norm=simple_norm(region, stretch='log'))
+        
+        if photometer.local_background_estimator is not None:
+            
+            annulus_mask = np.asarray(annulus_stats.data_cutout).astype(bool)
+            
+            # factor of 2 since matplotlib assumes diameter
+            annulus_inner_width = 2 * photometer.local_background_estimator.r_in_scale * psf_params['semimajor_sigma']
+            annulus_outer_width = 2 * photometer.local_background_estimator.r_out_scale * psf_params['semimajor_sigma']
+            annulus_inner_height = 2 * photometer.local_background_estimator.r_in_scale * psf_params['semiminor_sigma']
+            annulus_outer_height = 2 * photometer.local_background_estimator.r_out_scale * psf_params['semiminor_sigma']
+            
+            for coord in np.argwhere(annulus_mask):
+                row, col = coord
+                
+                # offset coords to fit within bbox region
+                row += dy
+                col += dx
+                
+                rect = Rectangle((col - 0.5, row - 0.5), 1, 1, linewidth=1, edgecolor='red', facecolor='none')
+                circ = Circle((col, row), .1, linewidth=1, edgecolor='red', facecolor='none')
+                axes[i].add_patch(rect)
+                axes[i].add_patch(circ)
+            
+            inner_ellipse = Ellipse(centre,
+                                    width=annulus_inner_width,
+                                    height=annulus_inner_height,
+                                    angle=psf_params['orientation'],
+                                    facecolor='none',
+                                    edgecolor='blue',
+                                    lw=1,
+                                    ls='--',
+                                    )
+            axes[i].add_patch(inner_ellipse)
 
+            outer_ellipse = Ellipse(centre,
+                                    width=annulus_outer_width,
+                                    height=annulus_outer_height,
+                                    angle=psf_params['orientation'],
+                                    facecolor='none',
+                                    edgecolor='blue',
+                                    lw=1,
+                                    ls='--',
+                                    )
+            axes[i].add_patch(outer_ellipse)
+        
+        aperture_ellipse = Ellipse(
+            centre,
+            width=2 * aperture.a,
+            height=2 * aperture.b,
+            angle=psf_params['orientation'],
+            facecolor='none',
+            edgecolor='blue',
+            lw=1,
+            ls='-',
+            )
+        axes[i].add_patch(aperture_ellipse)
+        
+        axes[i].set_xlabel('X', fontsize='large')
+        axes[i].set_ylabel('Y', fontsize='large')
+        axes[i].set_title(f'Source {target}', fontsize='large')
+    
+    fig.suptitle(fltr)
+    
+    if save:
+        save_path = os.path.join(out_directory, 'diag/apertures')
+        if not os.path.isdir(save_path):
+            os.makedirs(save_path)
+        fig.savefig(os.path.join(save_path, f'{fltr}_apertures.pdf'))
+    
+    if show:
+        plt.show(fig)
+    else:
+        fig.clear()
+        plt.close(fig)
+
+def get_max_region_size(
+    targets: List[int],
+    photometer: AperturePhotometer,
+    data: NDArray,
+    cat: QTable,
+    psf_params: Dict[str, float],
+    ) -> int:
+    """
+    Get the maximum region size for plotting apertures.
+    
+    Parameters
+    ----------
+    targets : List[int]
+        The target source IDs.
+    photometer : AperturePhotometer
+        The `AperturePhotometer` instance.
+    data : NDArray
+        The image data.
+    cat : QTable
+        The source catalog.
+    psf_params : Dict[str, float]
+        The PSF parameters.
+    
+    Returns
+    -------
+    int
+        The maximum region size.
+    """
+    
+    region_sizes = []
+    
+    for target in targets:
+        i = targets.index(target)
+        position = [cat['xcentroid'][i], cat['ycentroid'][i]]
+        
+        aperture = photometer.get_aperture(
+            position=position,
+            psf_params=psf_params,
+            )
+        
+        if photometer.local_background_estimator is not None:
+            annulus_stats = photometer.local_background_estimator.get_stats(
+                data=data,
+                position=position,
+                semimajor_axis=psf_params['semimajor_sigma'],
+                semiminor_axis=psf_params['semiminor_sigma'],
+                theta=psf_params['orientation'],
+                )
+            
+            bbox = annulus_stats.bbox
+        else:
+            aperture_stats = ApertureStats(
+                data=data,
+                aperture=aperture,
+                )
+            
+            bbox = aperture_stats.bbox
+        
+        width = bbox.ixmax - bbox.ixmin
+        height = bbox.iymax - bbox.iymin
+        region_sizes.append(max(width, height))
+    
+    return max(region_sizes)
 
 
 

@@ -18,7 +18,7 @@ from opticam.align import align_batch
 from opticam.background.global_background import BaseBackground, DefaultBackground
 from opticam.correctors.flat_field_corrector import FlatFieldCorrector
 from opticam.finders import DefaultFinder, get_source_coords_from_image
-from opticam.photometers import BasePhotometer, perform_photometry
+from opticam.photometers import AperturePhotometer, BasePhotometer, perform_photometry
 from opticam.utils.batching import get_batches, get_batch_size
 from opticam.utils.constants import bar_format
 from opticam.utils.data_checks import check_data
@@ -26,7 +26,7 @@ from opticam.plotting.gifs import compile_gif, create_gif_frame
 from opticam.utils.fits_handlers import get_data, get_stacked_images, save_stacked_images
 from opticam.utils.logging import recursive_log, log_psf_params
 from opticam.plotting.plots import plot_backgrounds, plot_background_meshes, plot_catalogs, plot_growth_curves, \
-    plot_time_between_files, plot_psf, plot_rms_vs_median_flux, plot_noise, plot_snrs
+    plot_time_between_files, plot_psf, plot_rms_vs_median_flux, plot_noise, plot_snrs, plot_apertures
 
 
 class Reducer:
@@ -551,7 +551,7 @@ class Reducer:
     def plot_growth_curves(
         self,
         targets: Dict[str, int | List[int]] | None = None,
-        show: bool = True,
+        save: bool = False,
         ) -> None:
         """
         Plot the growth curves for the sources identified in the catalog images. The resulting plots are saved to
@@ -573,8 +573,8 @@ class Reducer:
                     },
                 )
             ```
-        show : bool, optional
-            Whether to show the plots, by default `True`. The resulting plots are saved regardless of this value.
+        save : bool, optional
+            Whether to save the plots, by default `False`.
         """
         
         stacked_images = get_stacked_images(self.out_directory)
@@ -606,9 +606,10 @@ class Reducer:
             if not os.path.isdir(dir_path):
                 os.makedirs(dir_path, exist_ok=True)
             
-            fig.savefig(os.path.join(dir_path, f'{fltr}_growth_curves.pdf'))
+            if save:
+                fig.savefig(os.path.join(dir_path, f'{fltr}_growth_curves.pdf'))
             
-            if show:
+            if self.show_plots:
                 plt.show(fig)
             else:
                 plt.close(fig)
@@ -681,7 +682,11 @@ class Reducer:
             show=self.show_plots,
             )
 
-    def create_gifs(self, keep_frames: bool = True, overwrite: bool = False) -> None:
+    def create_gifs(
+        self,
+        keep_frames: bool = True,
+        overwrite: bool = False,
+        ) -> None:
         """
         Create alignment gifs for each camera. Some aspects of this method are parallelised for speed. The frames are 
         saved in out_directory/diag/*-band_gif_frames and the GIFs are saved in out_directory/cat.
@@ -742,6 +747,66 @@ class Reducer:
                 keep_frames=keep_frames,
                 verbose=self.verbose,
                 )
+
+    def plot_apertures(
+        self,
+        photometer: AperturePhotometer,
+        targets: Dict[str, int] | Dict[str, List[int]] | Dict[str, List[int] | int] | None = None,
+        save: bool = False,
+        ) -> None:
+        """
+        Plot the apertures over each source.
+        
+        Parameters
+        ----------
+        photometer : AperturePhotometer
+            The `AperturePhotometer` instance. If a local background estimator has been defined, this will also be
+            plotted.
+        targets : Dict[str, int] | Dict[str, List[int]] | Dict[str, List[int] | int] | None
+            The targets for which apertures will be plotted, by default `None` (apertures are plotted for all
+            sources). To plot apertures for specific targets, pass a dictionary with keys listing the
+            desired filters and values listing each filter's correpsonding target(s). For example:
+            ```
+            # plot apertures for the three brightest sources in each filter
+            photometer = opticam.AperturePhotometer()
+            plot_apertures(
+                photometer=photometer,
+                targets = {
+                    'g-band': [1, 2, 3],
+                    'r-band': [1, 2, 3],
+                    'i-band': [1, 2, 3],
+                    },
+                )
+            ```
+        save : bool, optional
+            Whether to save the plots, by default `False`.
+        """
+        
+        if targets is None:
+            targets = create_targets_dict(self.catalogs)
+        
+        for fltr in self.catalogs.keys():
+            if fltr not in targets.keys():
+                continue
+            
+            img = get_data(
+                self.reference_files[fltr],
+                flat_corrector=self.flat_corrector,
+                rebin_factor=self.rebin_factor,
+                remove_cosmic_rays=self.remove_cosmic_rays,
+                )[0]
+            
+            plot_apertures(
+                out_directory=self.out_directory,
+                data=img,
+                cat=self.catalogs[fltr],
+                targets=targets[fltr],
+                photometer=photometer,
+                psf_params=self.psf_params[fltr],
+                fltr=fltr,
+                show=self.show_plots,
+                save=save,
+            )
 
     def photometry(
         self,
