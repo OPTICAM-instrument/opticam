@@ -265,13 +265,13 @@ def plot_backgrounds(
             
             for col in range(len(background_files)):
                 axes[1, col].set_xlabel(f"Time from BMJD {t_ref:.4f} [s]", fontsize='large')
+            
+            axes[0, 0].set_ylabel("Median background", fontsize='large')
+            axes[1, 0].set_ylabel("Median background RMS", fontsize='large')
     
     for ax in axes.flatten():
         ax.minorticks_on()
         ax.tick_params(which="both", direction="in", top=True, right=True)
-    
-    axes[0, 0].set_ylabel("Median background", fontsize='large')
-    axes[1, 0].set_ylabel("Median background RMS", fontsize='large')
     
     if save:
         fig.savefig(os.path.join(out_directory, "diag/background.pdf"))
@@ -626,11 +626,13 @@ def plot_rms_vs_median_flux(
         )
     pl_fits = fit_rms_vs_flux(data)
     
+    assert len(pl_fits) >= 1, f"[OPTICAM] No valid light curve files found in {lc_dir}."
+    
     fig, axes = plt.subplots(
         nrows=2,
-        ncols=3,
+        ncols=len(pl_fits),
         tight_layout=True,
-        figsize=(15, 5),
+        figsize=(5 * len(pl_fits), 5),
         sharex='col',
         gridspec_kw={
             'hspace': 0,
@@ -640,14 +642,26 @@ def plot_rms_vs_median_flux(
     
     for fltr in data.keys():
         if fltr in ['u-band', 'g-band']:
-            ax1 = axes[0][0]
-            ax2 = axes[1][0]
+            if len(pl_fits) == 1:
+                ax1 = axes[0]
+                ax2 = axes[1]
+            else:
+                ax1 = axes[0][0]
+                ax2 = axes[1][0]
         elif fltr in ['r-band']:
-            ax1 = axes[0][1]
-            ax2 = axes[1][1]
+            if len(pl_fits) == 1:
+                ax1 = axes[0]
+                ax2 = axes[1]
+            else:
+                ax1 = axes[0][1]
+                ax2 = axes[1][1]
         elif fltr in ['i-band', 'z-band']:
-            ax1 = axes[0][2]
-            ax2 = axes[1][2]
+            if len(pl_fits) == 1:
+                ax1 = axes[0]
+                ax2 = axes[1]
+            else:
+                ax1 = axes[0][2]
+                ax2 = axes[1][2]
         else:
             raise ValueError(f'[OPTICAM] Unrecognised filter: {fltr}.')
         
