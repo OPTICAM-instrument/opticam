@@ -87,7 +87,7 @@ class BaseLocalBackground(ABC):
         semiminor_axis : float
             The semiminor standard deviation of the PSF.
         theta : float
-            The orientation of the source.
+            The orientation of the source **in radians**.
         
         Returns
         -------
@@ -119,7 +119,7 @@ class BaseLocalBackground(ABC):
         semiminor_axis : float
             The semiminor standard deviation of the PSF.
         theta : float
-            The orientation of the source.
+            The orientation of the source **in radians**.
         
         Returns
         -------
@@ -165,7 +165,7 @@ class DefaultLocalBackground(BaseLocalBackground):
         semiminor_axis : float
             The semiminor standard deviation of the PSF.
         theta : float
-            The orientation of the source.
+            The orientation of the source **in radians**.
         
         Returns
         -------
