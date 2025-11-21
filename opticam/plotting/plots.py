@@ -1078,9 +1078,10 @@ def plot_apertures(
         psf_params=psf_params,
     )
     
-    for target in targets:
-        i = targets.index(target)
-        position = [cat['xcentroid'][i], cat['ycentroid'][i]]
+    for i, target in enumerate(targets):
+        cat_indx = target - 1
+        position = [cat['xcentroid'][cat_indx], cat['ycentroid'][cat_indx]]
+        theta = cat['orientation'][cat_indx].value
         
         aperture = photometer.get_aperture(
             position=position,
@@ -1093,7 +1094,7 @@ def plot_apertures(
                 position=position,
                 semimajor_axis=psf_params['semimajor_sigma'],
                 semiminor_axis=psf_params['semiminor_sigma'],
-                theta=psf_params['orientation'],
+                theta=theta * np.pi / 180,  # radians
                 )
             bbox = annulus_stats.bbox
             
@@ -1153,7 +1154,7 @@ def plot_apertures(
             inner_ellipse = Ellipse(centre,
                                     width=annulus_inner_width,
                                     height=annulus_inner_height,
-                                    angle=psf_params['orientation'],
+                                    angle=theta,
                                     facecolor='none',
                                     edgecolor='blue',
                                     lw=1,
@@ -1164,7 +1165,7 @@ def plot_apertures(
             outer_ellipse = Ellipse(centre,
                                     width=annulus_outer_width,
                                     height=annulus_outer_height,
-                                    angle=psf_params['orientation'],
+                                    angle=theta,
                                     facecolor='none',
                                     edgecolor='blue',
                                     lw=1,
@@ -1176,7 +1177,7 @@ def plot_apertures(
             centre,
             width=2 * aperture.a,
             height=2 * aperture.b,
-            angle=psf_params['orientation'],
+            angle=theta,
             facecolor='none',
             edgecolor='blue',
             lw=1,
