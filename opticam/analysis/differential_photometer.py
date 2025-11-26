@@ -8,7 +8,6 @@ from astropy.table import QTable
 import json
 from stingray import Lightcurve
 from matplotlib.axes import Axes
-from astropy.io import fits
 from astroalign import find_transform
 
 from opticam.analysis.analyzer import Analyzer
