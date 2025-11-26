@@ -679,9 +679,15 @@ class Reducer:
 
     def plot_noise(
         self,
+        save: bool = False,
         ) -> None:
         """
         Plot the noise characterisation for each reference image.
+        
+        Parameters
+        ----------
+        save : bool, optional
+            Whether to save the plot, by default 'False'.
         """
         
         plot_noise(
@@ -691,6 +697,7 @@ class Reducer:
             psf_params=self.psf_params,
             catalogs=self.catalogs,
             show=self.show_plots,
+            save=save,
             )
 
     def create_gifs(

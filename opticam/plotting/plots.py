@@ -914,7 +914,8 @@ def plot_noise(
     background: BaseBackground | Callable,
     psf_params: Dict[str, Dict[str, float]],
     catalogs: Dict[str, QTable],
-    show: bool = False,
+    show: bool,
+    save: bool,
     ):
     """
     Plot the various noise contributions and compare them to the measured noise for a series of images.
@@ -933,8 +934,10 @@ def plot_noise(
         The catalogs for each filter {filter: catalog}.
     photometer : BasePhotometer
         The photometer to use for measuring noise.
-    show : bool, optional
-        Whether to show the plot, by default `False`.
+    show : bool
+        Whether to show the plot.
+    save : bool
+        Whether to save the plot.
     """
     
     fig, axes = plt.subplots(
@@ -1011,10 +1014,11 @@ def plot_noise(
         bbox_transform=fig.transFigure,
         )
     
-    fig.savefig(
-        os.path.join(out_directory, 'diag/noise_characterisation.pdf'),
-        bbox_inches='tight',
-        )
+    if save:
+        fig.savefig(
+            os.path.join(out_directory, 'diag/noise_characterisation.pdf'),
+            bbox_inches='tight',
+            )
     
     if show:
         plt.show()
