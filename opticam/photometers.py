@@ -11,7 +11,7 @@ from opticam.background.global_background import BaseBackground
 from opticam.background.local_background import BaseLocalBackground
 from opticam.correctors.flat_field_corrector import FlatFieldCorrector
 from opticam.finders import DefaultFinder
-from opticam.utils.constants import fwhm_scale
+from opticam.utils.constants import fwhm_scale, n_read
 from opticam.utils.fits_handlers import get_data
 from opticam.utils.helpers import camel_to_snake, propagate_errors
 
@@ -191,6 +191,9 @@ class BasePhotometer(ABC):
             'flux_err': [],
         }
         
+        if isinstance(self, AperturePhotometer):
+            results['snr'] = []
+        
         if self.local_background_estimator is not None:
             results['background'] = []
             results['background_err'] = []
@@ -219,6 +222,9 @@ class BasePhotometer(ABC):
         
         results['flux'].append(None)
         results['flux_err'].append(None)
+        
+        if isinstance(self, AperturePhotometer):
+            results['snr'].append(None)
         
         if self.local_background_estimator is not None:
             results['background'].append(None)
@@ -268,29 +274,57 @@ class BasePhotometer(ABC):
         """
         
         if self.local_background_estimator is None:
-            flux, flux_err = phot_function(
-                image=image,
-                dark_flux=dark_flux,
-                background_rms=background_rms,
-                position=position,
-                psf_params=psf_params,
-            )
-            
-            results['flux'].append(flux)
-            results['flux_err'].append(flux_err)
+            if isinstance(self, AperturePhotometer):
+                flux, flux_err, snr = phot_function(
+                    image=image,
+                    dark_flux=dark_flux,
+                    background_rms=background_rms,
+                    position=position,
+                    psf_params=psf_params,
+                )
+                
+                results['flux'].append(flux)
+                results['flux_err'].append(flux_err)
+                results['snr'].append(snr)
+            else:
+                flux, flux_err = phot_function(
+                    image=image,
+                    dark_flux=dark_flux,
+                    background_rms=background_rms,
+                    position=position,
+                    psf_params=psf_params,
+                )
+                
+                results['flux'].append(flux)
+                results['flux_err'].append(flux_err)
         else:
-            flux, flux_err, background, background_err = phot_function(
-                image=image,
-                dark_flux=dark_flux,
-                background_rms=background_rms,
-                position=position,
-                psf_params=psf_params,
-            )
-            
-            results['flux'].append(flux)
-            results['flux_err'].append(flux_err)
-            results['background'].append(background)
-            results['background_err'].append(background_err)
+            if isinstance(self, AperturePhotometer):
+                flux, flux_err, snr, background, background_err = phot_function(
+                    image=image,
+                    dark_flux=dark_flux,
+                    background_rms=background_rms,
+                    position=position,
+                    psf_params=psf_params,
+                )
+                
+                results['flux'].append(flux)
+                results['flux_err'].append(flux_err)
+                results['snr'].append(snr)
+                results['background'].append(background)
+                results['background_err'].append(background_err)
+            else:
+                flux, flux_err, background, background_err = phot_function(
+                    image=image,
+                    dark_flux=dark_flux,
+                    background_rms=background_rms,
+                    position=position,
+                    psf_params=psf_params,
+                )
+                
+                results['flux'].append(flux)
+                results['flux_err'].append(flux_err)
+                results['background'].append(background)
+                results['background_err'].append(background_err)
         
         return results
 
@@ -437,7 +471,7 @@ class AperturePhotometer(BasePhotometer):
         background_rms: NDArray | None,
         position: NDArray,
         psf_params: Dict[str, float],
-        ) -> Tuple[float, float] | Tuple[float, float, float, float]:
+        ) -> Tuple[float, float, float] | Tuple[float, float, float, float, float]:
         """
         Compute the aperture flux of a source in the image.
         
@@ -458,9 +492,9 @@ class AperturePhotometer(BasePhotometer):
         
         Returns
         -------
-        Tuple[float, float] | Tuple[float, float, float, float]
-            The flux and flux error. If `local_background_estimator` is defined, the background and its error are also
-            returned.
+        Tuple[float, float, float] | Tuple[float, float, float, float, float]
+            The flux, flux error, and signal-to-noise ratio. If `local_background_estimator` is defined, the background
+            and its error are also returned.
         """
         
         aperture = self.get_aperture(
@@ -476,7 +510,19 @@ class AperturePhotometer(BasePhotometer):
                 )
             phot_table = aperture_photometry(image, aperture, error=error)
             
-            return phot_table["aperture_sum"].value[0], phot_table["aperture_sum_err"].value[0]
+            flux = float(phot_table["aperture_sum"].value[0])
+            flux_err = float(phot_table["aperture_sum_err"].value[0])
+            snr = float(
+                compute_snr(
+                    N_source=flux,
+                    N_pix=aperture.area,
+                    n_sky=float(np.median(np.asarray(background_rms)))**2,
+                    dark_flux=dark_flux,
+                    gain=1.,
+                    )
+            )
+            
+            return flux, flux_err, snr
         else:
             
             local_background, local_background_rms = self.local_background_estimator(
@@ -496,10 +542,19 @@ class AperturePhotometer(BasePhotometer):
             
             phot_table = aperture_photometry(data_clean, aperture, error=error)
             
-            flux = phot_table["aperture_sum"].value[0]
-            flux_error = phot_table["aperture_sum_err"].value[0]
+            flux = float(phot_table["aperture_sum"].value[0])
+            flux_err = float(phot_table["aperture_sum_err"].value[0])
+            snr = float(
+                compute_snr(
+                    N_source=flux,
+                    N_pix=aperture.area,
+                    n_sky=local_background_rms**2,
+                    dark_flux=dark_flux,
+                    gain=1.,
+                    )
+            )
             
-            return flux, flux_error, local_background, local_background_rms
+            return flux, flux_err, snr, local_background, local_background_rms
 
     def get_aperture(
         self,
@@ -889,4 +944,40 @@ def get_growth_curve(
     return np.array(radii), np.array(fluxes)
 
 
-
+def compute_snr(
+    N_source: float | NDArray,
+    N_pix: float,
+    n_sky: float,
+    dark_flux: float,
+    gain: float,
+    ) -> float | NDArray:
+    """
+    The (simplified) S/N ratio equation or CCD Equation (see Chapter 4.4 of Handbook of CCD Astronomy by Howell, 2006).
+    
+    Parameters
+    ----------
+    N_source : float | NDArray
+        The total number of source counts.
+    N_pix : int
+        The number of aperture pixels.
+    n_sky : float
+        The number of sky counts **per pixel**.
+    dark_flux : float
+        The dark current's "flux" contribution per pixel.
+    gain: float
+        The detector gain.
+    
+    Returns
+    -------
+    float | NDArray
+        The S/N ratio.
+    """
+    
+    # this function is included to avoid a circular import error between noise.py and photometers.py
+    # TODO: resolve this and remove this function
+    
+    source_photons = N_source * gain
+    sky_photons_per_pix = n_sky * gain
+    read_counts_per_pixel = n_read
+    
+    return source_photons / np.sqrt(source_photons + N_pix * (sky_photons_per_pix + dark_flux + read_counts_per_pixel**2))
