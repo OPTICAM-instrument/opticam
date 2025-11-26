@@ -39,10 +39,15 @@ fwhm_scale = 2 * np.sqrt(2 * np.log(2))
 counts_to_mag_factor = 2.5 / np.log(10)
 
 # colors for catalog source markers
-catalog_colors = list(mcolors.TABLEAU_COLORS.keys())
-catalog_colors.pop(catalog_colors.index("tab:brown"))
-catalog_colors.pop(catalog_colors.index("tab:gray"))
-catalog_colors.pop(catalog_colors.index("tab:purple"))
-catalog_colors.pop(catalog_colors.index("tab:blue"))
+catalog_colors = [
+    'tab:blue',
+    'tab:orange',
+    'tab:green',
+    'tab:red',
+    'tab:brown',
+    'tab:pink',
+    'tab:olive',
+    'tab:cyan',
+    ]
 
 n_read = 1.1  # [electrons/pixel] Andor Zyla 4.2 PLUS read noise @ 216 MHz
