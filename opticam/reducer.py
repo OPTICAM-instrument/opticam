@@ -176,7 +176,7 @@ class Reducer:
         
         ########################################### check input data ###########################################
         
-        self.camera_files, self.binning_scale, self.bmjds, self.ignored_files, self.gains, self.t_ref = check_data(
+        self.camera_files, self.binning_scale, self.bmjds, self.ignored_files, self.gains, dark_currs, self.t_ref = check_data(
                 data_directory=data_directory,
                 c1_directory=c1_directory,
                 c2_directory=c2_directory,
@@ -198,6 +198,10 @@ class Reducer:
             show=self.show_plots,
             save=True,
             )
+        
+        ########################################### save dark currents ###########################################
+        
+        log_dark_current(self.out_directory, dark_currs, self.bmjds, self.camera_files)
         
         ########################################### define reference images ###########################################
         
@@ -652,9 +656,15 @@ class Reducer:
 
     def plot_snrs(
         self,
+        save: bool = False,
         ) -> None:
         """
         Plot the signal-to-noise ratios for each catalogued source in the reference images.
+        
+        Parameters
+        ----------
+        save : bool, optional
+            Whether to save the plot, by default `False`.
         """
         
         plot_snrs(
@@ -664,6 +674,7 @@ class Reducer:
             psf_params=self.psf_params,
             catalogs=self.catalogs,
             show=self.show_plots,
+            save=save,
         )
 
     def plot_noise(
@@ -941,6 +952,38 @@ def log_reducer_params(
         json.dump(params, file, indent=4)
 
 
+def log_dark_current(
+    out_directory: str,
+    dark_currs: Dict[str, float],
+    bmjds: Dict[str, float],
+    camera_files: Dict[str, List[str]],
+    ) -> None:
+    """
+    Save the dark currents for each filter.
+    
+    Parameters
+    ----------
+    out_directory : str
+        The path to the output directory.
+    dark_currs : Dict[str, float]
+        The dark current for each file {file: dark current}.
+    bmjds : Dict[str, float]
+        The time stamp for each file {file: time stamp}.
+    camera_files : Dict[str, List[str]]
+        The files grouped by filter {filter: files}.
+    """
+    
+    dark_curr_df = pd.DataFrame(dark_currs.items(), columns=['file', 'dark_current'])
+    bmjds_df = pd.DataFrame(bmjds.items(), columns=['file', 'BMJD'])
+    df = pd.merge(dark_curr_df, bmjds_df, on='file')
+    df = df[['BMJD', 'dark_current', 'file']]  # change column order
+    
+    for fltr, files in camera_files.items():
+        filter_df = df[df['file'].isin(files)]
+        filter_df = filter_df.drop(columns='file')
+        filter_df.to_csv(os.path.join(out_directory, f'diag/{fltr}_dark_current.csv'), index=False)
+
+
 def set_psf_params(
     aperture_selector: Callable,
     catalog: QTable,
@@ -960,7 +1003,6 @@ def set_psf_params(
     Dict[str, float]
         The PSF parameters.
     """
-    
     
     semimajor_sigma_pix = aperture_selector(catalog['semimajor_sigma'].value)
     semiminor_sigma_pix = aperture_selector(catalog['semiminor_sigma'].value)

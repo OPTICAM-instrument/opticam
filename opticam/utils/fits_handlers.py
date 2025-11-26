@@ -3,12 +3,12 @@ from typing import Dict, Tuple
 
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
+from astropy.io.fits import Header
 from astropy.time import Time
 from astropy import units as u
-from astropy.units import Quantity
 from ccdproc import cosmicray_lacosmic  # TODO: replace with astroscrappy to reduce dependencies?
 import numpy as np
-from numpy.typing import ArrayLike, NDArray
+from numpy.typing import NDArray
 import os.path
 
 from opticam.correctors.flat_field_corrector import FlatFieldCorrector
@@ -20,9 +20,9 @@ def get_header_info(
     file: str,
     barycenter: bool,
     logger: Logger | None,
-    ) -> Tuple[ArrayLike | None, str | None, str | None, float | None]:
+    ) -> Tuple[float | None, str | None, str | None, float | None, float | None]:
     """
-    Get the BMJD, filter, binning, and gain from a file header.
+    Get the BMJD, filter, binning, gain, and dark current from a file header.
     
     Parameters
     ----------
@@ -35,15 +35,16 @@ def get_header_info(
     
     Returns
     -------
-    Tuple[float, str, str, float]
-        The BMJD, filter, binning, and gain dictionaries.
+    Tuple[float | None, str | None, str | None, float | None, float | None]
+        The BMJD, filter, binning, gain, and dark current.
     """
     
     try:
         header = get_header(file)
         
-        binning = header["BINNING"]
-        gain = header["GAIN"]
+        dark_curr = float(header["DARKCURR"])  # type: ignore
+        binning = str(header["BINNING"])
+        gain = float(header["GAIN"])  # type: ignore
         
         try:
             ra = header["RA"]
@@ -54,28 +55,28 @@ def get_header_info(
             pass
         
         mjd = get_time(header, file)
-        fltr = header["FILTER"]
+        fltr = str(header["FILTER"])
         
         if barycenter:
             try:
                 # try to compute barycentric dynamical time
                 coords = SkyCoord(ra, dec, unit=(u.hourangle, u.deg))
-                bmjd = apply_barycentric_correction(mjd, coords)
-                return bmjd, fltr, binning, gain
+                bmjd = float(apply_barycentric_correction(mjd, coords))
+                return bmjd, fltr, binning, gain, dark_curr
             except Exception as e:
                 if logger:
                     logger.info(f"[OPTICAM] Could not compute BMJD for {file}: {e}. Skipping.")
-                return None, None, None, None
+                return None, None, None, None, None
     except Exception as e:
         if logger:
             logger.info(f'[OPTICAM] Could not read {file}: {e}. Skipping.')
-        return None, None, None, None
+        return None, None, None, None, None
     
-    return mjd, fltr, binning, gain
+    return mjd, fltr, binning, gain, dark_curr
 
 
 def get_time(
-    header: Dict,
+    header: Header,
     file: str,
     ) -> float:
     """

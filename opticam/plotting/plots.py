@@ -819,7 +819,8 @@ def plot_snrs(
     background: BaseBackground | Callable,
     psf_params: Dict[str, Dict[str, float]],
     catalogs: Dict[str, QTable],
-    show: bool = False,
+    show: bool,
+    save: bool,
     ):
     """
     Plot the S/N for each source.
@@ -838,8 +839,10 @@ def plot_snrs(
         The catalogs for each filter {filter: catalog}.
     photometer : BasePhotometer
         The photometer to use for measuring noise.
-    show : bool, optional
-        Whether to show the plot, by default `False`.
+    show : bool
+        Whether to show the plot.
+    save : bool
+        Whether to save the plot.
     """
     
     fig, axes = plt.subplots(
@@ -893,10 +896,11 @@ def plot_snrs(
         ax.minorticks_on()
         ax.tick_params(which='both', direction='in', right=True, top=True)
     
-    fig.savefig(
-        os.path.join(out_directory, 'diag/snrs.pdf'),
-        bbox_inches='tight',
-        )
+    if save:
+        fig.savefig(
+            os.path.join(out_directory, 'diag/snrs.pdf'),
+            bbox_inches='tight',
+            )
     
     if show:
         plt.show()
