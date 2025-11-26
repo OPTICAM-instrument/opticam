@@ -1222,7 +1222,10 @@ def save_photometry_results(
         
         # drop NaNs
         df.dropna(inplace=True, ignore_index=True)
-        df.reset_index(drop=True, inplace=True)
+        
+        # make time column left-most column
+        time_col = df.pop(time_key)
+        df.insert(0, time_key, time_col)
         
         # save to file
         df.to_csv(
