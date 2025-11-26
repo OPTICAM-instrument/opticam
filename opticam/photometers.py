@@ -191,9 +191,6 @@ class BasePhotometer(ABC):
             'flux_err': [],
         }
         
-        if isinstance(self, AperturePhotometer):
-            results['snr'] = []
-        
         if self.local_background_estimator is not None:
             results['background'] = []
             results['background_err'] = []
@@ -222,9 +219,6 @@ class BasePhotometer(ABC):
         
         results['flux'].append(None)
         results['flux_err'].append(None)
-        
-        if isinstance(self, AperturePhotometer):
-            results['snr'].append(None)
         
         if self.local_background_estimator is not None:
             results['background'].append(None)
@@ -274,57 +268,29 @@ class BasePhotometer(ABC):
         """
         
         if self.local_background_estimator is None:
-            if isinstance(self, AperturePhotometer):
-                flux, flux_err, snr = phot_function(
-                    image=image,
-                    dark_flux=dark_flux,
-                    background_rms=background_rms,
-                    position=position,
-                    psf_params=psf_params,
-                )
-                
-                results['flux'].append(flux)
-                results['flux_err'].append(flux_err)
-                results['snr'].append(snr)
-            else:
-                flux, flux_err = phot_function(
-                    image=image,
-                    dark_flux=dark_flux,
-                    background_rms=background_rms,
-                    position=position,
-                    psf_params=psf_params,
-                )
-                
-                results['flux'].append(flux)
-                results['flux_err'].append(flux_err)
+            flux, flux_err = phot_function(
+                image=image,
+                dark_flux=dark_flux,
+                background_rms=background_rms,
+                position=position,
+                psf_params=psf_params,
+            )
+            
+            results['flux'].append(flux)
+            results['flux_err'].append(flux_err)
         else:
-            if isinstance(self, AperturePhotometer):
-                flux, flux_err, snr, background, background_err = phot_function(
-                    image=image,
-                    dark_flux=dark_flux,
-                    background_rms=background_rms,
-                    position=position,
-                    psf_params=psf_params,
-                )
-                
-                results['flux'].append(flux)
-                results['flux_err'].append(flux_err)
-                results['snr'].append(snr)
-                results['background'].append(background)
-                results['background_err'].append(background_err)
-            else:
-                flux, flux_err, background, background_err = phot_function(
-                    image=image,
-                    dark_flux=dark_flux,
-                    background_rms=background_rms,
-                    position=position,
-                    psf_params=psf_params,
-                )
-                
-                results['flux'].append(flux)
-                results['flux_err'].append(flux_err)
-                results['background'].append(background)
-                results['background_err'].append(background_err)
+            flux, flux_err, background, background_err = phot_function(
+                image=image,
+                dark_flux=dark_flux,
+                background_rms=background_rms,
+                position=position,
+                psf_params=psf_params,
+            )
+            
+            results['flux'].append(flux)
+            results['flux_err'].append(flux_err)
+            results['background'].append(background)
+            results['background_err'].append(background_err)
         
         return results
 
@@ -512,17 +478,8 @@ class AperturePhotometer(BasePhotometer):
             
             flux = float(phot_table["aperture_sum"].value[0])
             flux_err = float(phot_table["aperture_sum_err"].value[0])
-            snr = float(
-                compute_snr(
-                    N_source=flux,
-                    N_pix=aperture.area,
-                    n_sky=float(np.median(np.asarray(background_rms)))**2,
-                    dark_flux=dark_flux,
-                    gain=1.,
-                    )
-            )
             
-            return flux, flux_err, snr
+            return flux, flux_err
         else:
             
             local_background, local_background_rms = self.local_background_estimator(
@@ -544,17 +501,8 @@ class AperturePhotometer(BasePhotometer):
             
             flux = float(phot_table["aperture_sum"].value[0])
             flux_err = float(phot_table["aperture_sum_err"].value[0])
-            snr = float(
-                compute_snr(
-                    N_source=flux,
-                    N_pix=aperture.area,
-                    n_sky=local_background_rms**2,
-                    dark_flux=dark_flux,
-                    gain=1.,
-                    )
-            )
             
-            return flux, flux_err, snr, local_background, local_background_rms
+            return flux, flux_err, local_background, local_background_rms
 
     def get_aperture(
         self,
@@ -702,21 +650,20 @@ class OptimalPhotometer(BasePhotometer):
             returned.
         """
         
-        weights = self.get_weights(
-            width=image.shape[1],
-            height=image.shape[0],
-            position=position,
-            psf_params=psf_params,
-            )
-        
         if self.local_background_estimator is None:
-            flux = np.sum(image * weights)
             error = propagate_errors(
                 data=image,
                 dark_flux=dark_flux,
                 background_rms=np.asarray(background_rms),
                 )
-            flux_error = np.sqrt(np.sum((error * weights)**2))
+            weights, norm = self.get_weights(
+            var=error**2,
+            position=position,
+            psf_params=psf_params,
+            )
+            
+            flux = np.sum(image * weights) / norm
+            flux_error = np.sqrt(1 / norm)
             
             return flux, flux_error
         else:
@@ -735,28 +682,30 @@ class OptimalPhotometer(BasePhotometer):
                 dark_flux=dark_flux,
                 background_rms=local_background_rms,
                 )
+            weights, norm = self.get_weights(
+            var=error**2,
+            position=position,
+            psf_params=psf_params,
+            )
             
             flux = np.sum(image_clean * weights)
-            flux_error = np.sqrt(np.sum((error * weights)**2))
+            flux_error = np.sqrt(1 / norm)
             
             return flux, flux_error, local_background, local_background_rms
 
     @staticmethod
     def get_weights(
-        width: int,
-        height: int,
+        var: NDArray,
         position: NDArray,
         psf_params: Dict[str, float],
-        ) -> NDArray:
+        ) -> Tuple[NDArray, float]:
         """
         Compute the optimal weight for each pixel in an image.
         
         Parameters
         ----------
-        width : int
-            The width of the image.
-        height : int
-            The height of the image.
+        var : NDArray
+            The variance image.
         position : NDArray
             The position of the source.
         psf_params : Dict[str, float]
@@ -764,12 +713,12 @@ class OptimalPhotometer(BasePhotometer):
         
         Returns
         -------
-        NDArray
-            The normalised weights.
+        Tuple[NDArray, float]
+            The weights and the normalisation constant.
         """
         
         # define pixel coordinates
-        y, x = np.ogrid[:height, :width]
+        y, x = np.ogrid[:var.shape[0], :var.shape[1]]
         
         theta = psf_params['orientation'] * np.pi / 180
         
@@ -778,9 +727,11 @@ class OptimalPhotometer(BasePhotometer):
         x_rot = (x - x0) * np.cos(theta) + (y - y0) * np.sin(theta)
         y_rot = -(x - x0) * np.sin(theta) + (y - y0) * np.cos(theta)
         
-        weights = np.exp(- .5 * ((x_rot / psf_params['semimajor_sigma'])**2 + (y_rot / psf_params['semiminor_sigma'])**2))
+        psf = np.exp(- .5 * ((x_rot / psf_params['semimajor_sigma'])**2 + (y_rot / psf_params['semiminor_sigma'])**2))
+        weights = psf / var
+        normalisation = np.sum(psf**2 / var)
         
-        return weights / np.sum(weights)
+        return weights, normalisation
 
 
 
@@ -944,40 +895,3 @@ def get_growth_curve(
     return np.array(radii), np.array(fluxes)
 
 
-def compute_snr(
-    N_source: float | NDArray,
-    N_pix: float,
-    n_sky: float,
-    dark_flux: float,
-    gain: float,
-    ) -> float | NDArray:
-    """
-    The (simplified) S/N ratio equation or CCD Equation (see Chapter 4.4 of Handbook of CCD Astronomy by Howell, 2006).
-    
-    Parameters
-    ----------
-    N_source : float | NDArray
-        The total number of source counts.
-    N_pix : int
-        The number of aperture pixels.
-    n_sky : float
-        The number of sky counts **per pixel**.
-    dark_flux : float
-        The dark current's "flux" contribution per pixel.
-    gain: float
-        The detector gain.
-    
-    Returns
-    -------
-    float | NDArray
-        The S/N ratio.
-    """
-    
-    # this function is included to avoid a circular import error between noise.py and photometers.py
-    # TODO: resolve this and remove this function
-    
-    source_photons = N_source * gain
-    sky_photons_per_pix = n_sky * gain
-    read_counts_per_pixel = n_read
-    
-    return source_photons / np.sqrt(source_photons + N_pix * (sky_photons_per_pix + dark_flux + read_counts_per_pixel**2))
