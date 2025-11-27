@@ -11,7 +11,7 @@ from opticam.background.global_background import BaseBackground
 from opticam.background.local_background import BaseLocalBackground
 from opticam.correctors.flat_field_corrector import FlatFieldCorrector
 from opticam.finders import DefaultFinder
-from opticam.utils.constants import fwhm_scale, n_read
+from opticam.utils.constants import fwhm_scale
 from opticam.utils.fits_handlers import get_data
 from opticam.utils.helpers import camel_to_snake, propagate_errors
 
