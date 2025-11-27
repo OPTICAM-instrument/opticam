@@ -678,7 +678,7 @@ class OptimalPhotometer(BasePhotometer):
             
             image_clean = image - local_background
             error = propagate_errors(
-                data=image,
+                data=image_clean,
                 dark_flux=dark_flux,
                 background_rms=local_background_rms,
                 )
@@ -688,7 +688,7 @@ class OptimalPhotometer(BasePhotometer):
             psf_params=psf_params,
             )
             
-            flux = np.sum(image_clean * weights)
+            flux = np.sum(image_clean * weights) / norm
             flux_error = np.sqrt(1 / norm)
             
             return flux, flux_error, local_background, local_background_rms
