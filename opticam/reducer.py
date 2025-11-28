@@ -18,7 +18,7 @@ from opticam.align import align_batch
 from opticam.background.global_background import BaseBackground, DefaultBackground
 from opticam.correctors.flat_field_corrector import FlatFieldCorrector
 from opticam.finders import DefaultFinder, get_source_coords_from_image
-from opticam.photometers import BasePhotometer, perform_photometry
+from opticam.photometers import AperturePhotometer, BasePhotometer, perform_photometry
 from opticam.utils.batching import get_batches, get_batch_size
 from opticam.utils.constants import bar_format
 from opticam.utils.data_checks import check_data
@@ -26,7 +26,7 @@ from opticam.plotting.gifs import compile_gif, create_gif_frame
 from opticam.utils.fits_handlers import get_data, get_stacked_images, save_stacked_images
 from opticam.utils.logging import recursive_log, log_psf_params
 from opticam.plotting.plots import plot_backgrounds, plot_background_meshes, plot_catalogs, plot_growth_curves, \
-    plot_time_between_files, plot_psf, plot_rms_vs_median_flux, plot_noise, plot_snrs
+    plot_time_between_files, plot_psf, plot_rms_vs_median_flux, plot_noise, plot_snrs, plot_apertures
 
 
 class Reducer:
@@ -176,7 +176,7 @@ class Reducer:
         
         ########################################### check input data ###########################################
         
-        self.camera_files, self.binning_scale, self.bmjds, self.ignored_files, self.gains, self.t_ref = check_data(
+        self.camera_files, self.binning_scale, self.bmjds, self.ignored_files, self.gains, dark_currs, self.t_ref = check_data(
                 data_directory=data_directory,
                 c1_directory=c1_directory,
                 c2_directory=c2_directory,
@@ -198,6 +198,10 @@ class Reducer:
             show=self.show_plots,
             save=True,
             )
+        
+        ########################################### save dark currents ###########################################
+        
+        log_dark_current(self.out_directory, dark_currs, self.bmjds, self.camera_files)
         
         ########################################### define reference images ###########################################
         
@@ -263,11 +267,12 @@ class Reducer:
         ########################################### read catalogs ###########################################
         
         for fltr in list(self.camera_files.keys()):
-            if os.path.isfile(os.path.join(self.out_directory, f"cat/{fltr}_catalog.ecsv")):
+            file_path = os.path.join(self.out_directory, f"cat/{fltr}_catalog.ecsv")
+            if os.path.isfile(file_path):
                 self.catalogs.update(
                     {
                         fltr: QTable.read(
-                            os.path.join(self.out_directory, f"cat/{fltr}_catalog.ecsv"),
+                            file_path,
                             format="ascii.ecsv",
                             )
                         }
@@ -278,6 +283,17 @@ class Reducer:
                     )
                 if self.verbose:
                     print(f"[OPTICAM] Read {fltr} catalog from file.")
+        
+        ########################################### read unaligned files ###########################################
+        
+        file_path = os.path.join(self.out_directory, 'diag/unaligned_files.txt')
+        if os.path.isfile(file_path):
+            with open(file_path, 'r') as file:
+                for line in file:
+                    self.unaligned_files.append(line)
+            
+            if self.verbose:
+                    print(f"[OPTICAM] Read unaligned files from file.")
 
     def create_catalogs(
         self,
@@ -288,7 +304,6 @@ class Reducer:
         translation_limit: float | int | List[float | int] | None = None,
         scale_limit: float | None = None,
         overwrite: bool = False,
-        show_diagnostic_plots: bool = False,
         ) -> None:
         """
         Initialise the source catalogs for each camera. Some aspects of this method are parallelised for speed.
@@ -317,9 +332,6 @@ class Reducer:
             x-translation limit and the second value defines the y-translation limit.
         overwrite : bool, optional
             Whether to overwrite existing catalogs, by default False.
-        show_diagnostic_plots : bool, optional
-            Whether to show diagnostic plots, by default False. Diagnostic plots are saved to out_directory, so this
-            parameter only affects whether the plots are displayed in the console.
         """
         
         assert transform_type in ['affine', 'translation'], '[OPTICAM] transform_type must be either "affine" or "translation".'
@@ -346,8 +358,6 @@ class Reducer:
         if self.verbose:
             print('[OPTICAM] Creating source catalogs')
         
-        background_median = {}
-        background_rms = {}
         stacked_images = {}
         
         instance_align_batch = partial(
@@ -370,14 +380,12 @@ class Reducer:
                 continue
             
             # get reference image
-            reference_image = np.asarray(
-                get_data(
-                    file=self.reference_files[fltr],
-                    flat_corrector=self.flat_corrector,
-                    rebin_factor=self.rebin_factor,
-                    remove_cosmic_rays=self.remove_cosmic_rays,
-                    )
-                )
+            reference_image = get_data(
+                file=self.reference_files[fltr],
+                flat_corrector=self.flat_corrector,
+                rebin_factor=self.rebin_factor,
+                remove_cosmic_rays=self.remove_cosmic_rays,
+                )[0]
             
             try:
                 # get source coordinates in descending order of brightness
@@ -419,14 +427,13 @@ class Reducer:
                 tqdm_class=tqdm,
                 )
             
-            self.transforms, self.unaligned_files, stacked_image, background_median[fltr], background_rms[fltr] = \
-                parse_alignment_results(
-                    results=results,
-                    camera_files=self.camera_files[fltr],
-                    transforms=self.transforms,
-                    unaligned_files=self.unaligned_files,
-                    verbose=self.verbose,
-                    )
+            self.transforms, self.unaligned_files, stacked_image, background = parse_alignment_results(
+                results=results,
+                camera_files=self.camera_files[fltr],
+                transforms=self.transforms,
+                unaligned_files=self.unaligned_files,
+                verbose=self.verbose,
+                )
             
             try:
                 # estimate threshold for source detection
@@ -451,7 +458,7 @@ class Reducer:
             # save stacked image
             stacked_images[fltr] = stacked_image
             
-            # limit catalog to brightest max_catalog_sources sources
+            # limit catalog to brightest sources
             tbl = tbl[:max_catalog_sources]
             
             # save catalog
@@ -465,6 +472,13 @@ class Reducer:
             self.psf_params[fltr] = set_psf_params(
                 aperture_selector=self.aperture_selector,
                 catalog=self.catalogs[fltr],
+                )
+            
+            save_background(
+                out_directory=self.out_directory,
+                background=background,
+                fltr=fltr,
+                bmjds=self.bmjds,
                 )
         
         log_psf_params(
@@ -490,40 +504,9 @@ class Reducer:
         
         plot_backgrounds(
             out_directory=self.out_directory,
-            camera_files=self.camera_files,
-            background_median=background_median,
-            background_rms=background_rms,
-            bmjds=self.bmjds,
             t_ref=self.t_ref,
-            show=show_diagnostic_plots,
-            save=True,
-            )
-        
-        plot_background_meshes(
-            out_directory=self.out_directory,
-            filters=list(self.camera_files.keys()),
-            stacked_images=stacked_images,
-            background=self.background,
-            show=show_diagnostic_plots,
-            save=True,
-            )
-        
-        plot_snrs(
-            out_directory=self.out_directory,
-            files=self.reference_files,
-            background=self.background,
-            psf_params=self.psf_params,
-            catalogs=self.catalogs,
             show=self.show_plots,
-        )
-        
-        plot_noise(
-            out_directory=self.out_directory,
-            files=self.reference_files,
-            background=self.background,
-            psf_params=self.psf_params,
-            catalogs=self.catalogs,
-            show=self.show_plots,
+            save=True,
             )
         
         # save transforms to file
@@ -537,10 +520,42 @@ class Reducer:
                 for file in self.unaligned_files:
                     unaligned_file.write(file + "\n")
 
+    def plot_background_meshes(
+        self,
+        save: bool = False,
+        ) -> None:
+        """
+        Plot the background mesh over an image from each filter to verify it's appropriately sized. If stacked catalog
+        images exist, those will be used. Otherwise, a random image will be chosen for each filter.
+        
+        Parameters
+        ----------
+        save : bool, optional
+            Whether to save the plot, by default `False`.
+        """
+        
+        try:
+            images = get_stacked_images(self.out_directory)
+        except FileNotFoundError:
+            images = get_random_image_for_each_filter(self.camera_files)
+            
+            # subtract background
+            for label, image in images.items():
+                bkg = self.background(image)
+                images[label] = image - bkg.background
+        
+        plot_background_meshes(
+            out_directory=self.out_directory,
+            images=images,
+            background=self.background,
+            show=self.show_plots,
+            save=save,
+            )
+
     def plot_growth_curves(
         self,
         targets: Dict[str, int | List[int]] | None = None,
-        show: bool = True,
+        save: bool = False,
         ) -> None:
         """
         Plot the growth curves for the sources identified in the catalog images. The resulting plots are saved to
@@ -562,8 +577,8 @@ class Reducer:
                     },
                 )
             ```
-        show : bool, optional
-            Whether to show the plots, by default `True`. The resulting plots are saved regardless of this value.
+        save : bool, optional
+            Whether to save the plots, by default `False`.
         """
         
         stacked_images = get_stacked_images(self.out_directory)
@@ -595,9 +610,10 @@ class Reducer:
             if not os.path.isdir(dir_path):
                 os.makedirs(dir_path, exist_ok=True)
             
-            fig.savefig(os.path.join(dir_path, f'{fltr}_growth_curves.pdf'))
+            if save:
+                fig.savefig(os.path.join(dir_path, f'{fltr}_growth_curves.pdf'))
             
-            if show:
+            if self.show_plots:
                 plt.show(fig)
             else:
                 plt.close(fig)
@@ -638,7 +654,57 @@ class Reducer:
                     out_directory=self.out_directory,
                 )
 
-    def create_gifs(self, keep_frames: bool = True, overwrite: bool = False) -> None:
+    def plot_snrs(
+        self,
+        save: bool = False,
+        ) -> None:
+        """
+        Plot the signal-to-noise ratios for each catalogued source in the reference images.
+        
+        Parameters
+        ----------
+        save : bool, optional
+            Whether to save the plot, by default `False`.
+        """
+        
+        plot_snrs(
+            out_directory=self.out_directory,
+            files=self.reference_files,
+            background=self.background,
+            psf_params=self.psf_params,
+            catalogs=self.catalogs,
+            show=self.show_plots,
+            save=save,
+        )
+
+    def plot_noise(
+        self,
+        save: bool = False,
+        ) -> None:
+        """
+        Plot the noise characterisation for each reference image.
+        
+        Parameters
+        ----------
+        save : bool, optional
+            Whether to save the plot, by default 'False'.
+        """
+        
+        plot_noise(
+            out_directory=self.out_directory,
+            files=self.reference_files,
+            background=self.background,
+            psf_params=self.psf_params,
+            catalogs=self.catalogs,
+            show=self.show_plots,
+            save=save,
+            )
+
+    def create_gifs(
+        self,
+        keep_frames: bool = True,
+        overwrite: bool = False,
+        ) -> None:
         """
         Create alignment gifs for each camera. Some aspects of this method are parallelised for speed. The frames are 
         saved in out_directory/diag/*-band_gif_frames and the GIFs are saved in out_directory/cat.
@@ -699,6 +765,66 @@ class Reducer:
                 keep_frames=keep_frames,
                 verbose=self.verbose,
                 )
+
+    def plot_apertures(
+        self,
+        photometer: AperturePhotometer,
+        targets: Dict[str, int] | Dict[str, List[int]] | Dict[str, List[int] | int] | None = None,
+        save: bool = False,
+        ) -> None:
+        """
+        Plot the apertures over each source.
+        
+        Parameters
+        ----------
+        photometer : AperturePhotometer
+            The `AperturePhotometer` instance. If a local background estimator has been defined, this will also be
+            plotted.
+        targets : Dict[str, int] | Dict[str, List[int]] | Dict[str, List[int] | int] | None
+            The targets for which apertures will be plotted, by default `None` (apertures are plotted for all
+            sources). To plot apertures for specific targets, pass a dictionary with keys listing the
+            desired filters and values listing each filter's correpsonding target(s). For example:
+            ```
+            # plot apertures for the three brightest sources in each filter
+            photometer = opticam.AperturePhotometer()
+            plot_apertures(
+                photometer=photometer,
+                targets = {
+                    'g-band': [1, 2, 3],
+                    'r-band': [1, 2, 3],
+                    'i-band': [1, 2, 3],
+                    },
+                )
+            ```
+        save : bool, optional
+            Whether to save the plots, by default `False`.
+        """
+        
+        if targets is None:
+            targets = create_targets_dict(self.catalogs)
+        
+        for fltr in self.catalogs.keys():
+            if fltr not in targets.keys():
+                continue
+            
+            img = get_data(
+                self.reference_files[fltr],
+                flat_corrector=self.flat_corrector,
+                rebin_factor=self.rebin_factor,
+                remove_cosmic_rays=self.remove_cosmic_rays,
+                )[0]
+            
+            plot_apertures(
+                out_directory=self.out_directory,
+                data=img,
+                cat=self.catalogs[fltr],
+                targets=targets[fltr],
+                photometer=photometer,
+                psf_params=self.psf_params[fltr],
+                fltr=fltr,
+                show=self.show_plots,
+                save=save,
+            )
 
     def photometry(
         self,
@@ -790,6 +916,14 @@ class Reducer:
 def log_reducer_params(
     reducer: Reducer,
     ) -> None:
+    """
+    Log the input parameters of a `Reducer` instance to file.
+    
+    Parameters
+    ----------
+    reducer : Reducer
+        The `Reducer` instance.
+    """
     
     # get parameters
     params = dict(recursive_log(reducer, max_depth=5))
@@ -825,6 +959,38 @@ def log_reducer_params(
         json.dump(params, file, indent=4)
 
 
+def log_dark_current(
+    out_directory: str,
+    dark_currs: Dict[str, float],
+    bmjds: Dict[str, float],
+    camera_files: Dict[str, List[str]],
+    ) -> None:
+    """
+    Save the dark currents for each filter.
+    
+    Parameters
+    ----------
+    out_directory : str
+        The path to the output directory.
+    dark_currs : Dict[str, float]
+        The dark current for each file {file: dark current}.
+    bmjds : Dict[str, float]
+        The time stamp for each file {file: time stamp}.
+    camera_files : Dict[str, List[str]]
+        The files grouped by filter {filter: files}.
+    """
+    
+    dark_curr_df = pd.DataFrame(dark_currs.items(), columns=['file', 'dark_current'])
+    bmjds_df = pd.DataFrame(bmjds.items(), columns=['file', 'BMJD'])
+    df = pd.merge(dark_curr_df, bmjds_df, on='file')
+    df = df[['BMJD', 'dark_current', 'file']]  # change column order
+    
+    for fltr, files in camera_files.items():
+        filter_df = df[df['file'].isin(files)]
+        filter_df = filter_df.drop(columns='file')
+        filter_df.to_csv(os.path.join(out_directory, f'diag/{fltr}_dark_current.csv'), index=False)
+
+
 def set_psf_params(
     aperture_selector: Callable,
     catalog: QTable,
@@ -845,7 +1011,6 @@ def set_psf_params(
         The PSF parameters.
     """
     
-    
     semimajor_sigma_pix = aperture_selector(catalog['semimajor_sigma'].value)
     semiminor_sigma_pix = aperture_selector(catalog['semiminor_sigma'].value)
     orientation = aperture_selector(catalog['orientation'].value)
@@ -863,7 +1028,7 @@ def parse_alignment_results(
     transforms: Dict[str, List[float]],
     unaligned_files: List[str],
     verbose: bool,
-    ) -> Tuple[Dict[str, List[float]], List[str], NDArray, Dict[str, float], Dict[str, float]]:
+    ) -> Tuple[Dict[str, List[float]], List[str], NDArray, Dict[str, Dict[str, float]]]:
     """
     Parse the alignment results.
     
@@ -889,17 +1054,15 @@ def parse_alignment_results(
     
     fltr_transforms = {}
     fltr_unaligned_files = []
-    fltr_background_medians = {}
-    fltr_background_rmss = {}
+    fltr_background = {}
     
     # unpack results
-    batch_stacked_images, batch_transforms, batch_background_medians, batch_background_rmss = zip(*results)
+    batch_stacked_images, batch_transforms, batch_backgrounds = zip(*results)
     
     # combine results
     for i in range(len(batch_stacked_images)):
         fltr_transforms.update(batch_transforms[i])
-        fltr_background_medians.update(batch_background_medians[i])
-        fltr_background_rmss.update(batch_background_rmss[i])
+        fltr_background.update(batch_backgrounds[i])
     
     aligned_files = list(fltr_transforms.keys())
     for file in camera_files:
@@ -916,7 +1079,74 @@ def parse_alignment_results(
         print(f'[OPTICAM] {len(fltr_transforms)} image(s) aligned.')
         print(f'[OPTICAM] {len(fltr_unaligned_files)} image(s) could not be aligned.')
     
-    return transforms, unaligned_files, stacked_image, fltr_background_medians, fltr_background_rmss
+    return transforms, unaligned_files, stacked_image, fltr_background
+
+
+def save_background(
+    out_directory: str,
+    background: Dict[str, Dict[str, float]],
+    fltr: str,
+    bmjds: Dict[str, float],
+    ) -> None:
+    """
+    Save the median background and its RMS to a CSV file.
+    
+    Parameters
+    ----------
+    out_directory : str
+        The output directory.
+    background : Dict[str, Dict[str, float]]
+        The background values for each file.
+    fltr : str
+        The corresponding filter.
+    bmjds : Dict[str, float]
+        The BMJD values for each file.
+    """
+    
+    df = pd.DataFrame.from_dict(background, orient='index').reset_index()
+    df.columns = ['file', 'median', 'rms']
+    
+    time_df = pd.DataFrame.from_dict(bmjds, orient='index').reset_index()
+    time_df.columns = ['file', 'BMJD']
+    
+    merged_df = pd.merge(df, time_df, on='file', how='inner')  # merge dataframes to get corresponding times
+    merged_df = merged_df.drop('file', axis=1)  # delete file column
+    merged_df = merged_df.reindex(columns=['BMJD', 'median', 'rms'])  # reorder columns
+    
+    merged_df.to_csv(os.path.join(out_directory, f'diag/{fltr}_background.csv'), index=False)
+
+
+def get_random_image_for_each_filter(
+    camera_files: Dict[str, List[str]],
+    ) -> Dict[str, NDArray]:
+    """
+    Choose a random image for each filter from a dictionary.
+    
+    Parameters
+    ----------
+    camera_files : Dict[str, List[str]]
+        The filters and corresponding files in the data directory.
+    
+    Returns
+    -------
+    Dict[str, NDArray]
+        A dictionary containing a random file for each filter
+    """
+    
+    rng = np.random.default_rng()
+    images = {}
+    
+    for files in camera_files.values():
+        file = files[rng.choice(len(files))]  # choose a random file
+        file_name = file.split('/')[-1]  # get file name (final part of the file path)
+        images[file_name] = get_data(
+            file=file,
+            flat_corrector=None,
+            rebin_factor=1,
+            remove_cosmic_rays=False,
+            )[0]
+    
+    return images
 
 
 def create_targets_dict(
@@ -992,7 +1222,10 @@ def save_photometry_results(
         
         # drop NaNs
         df.dropna(inplace=True, ignore_index=True)
-        df.reset_index(drop=True, inplace=True)
+        
+        # make time column left-most column
+        time_col = df.pop(time_key)
+        df.insert(0, time_key, time_col)
         
         # save to file
         df.to_csv(

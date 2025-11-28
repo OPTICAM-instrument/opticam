@@ -13,7 +13,7 @@ from opticam.correctors.flat_field_corrector import FlatFieldCorrector
 from opticam.finders import DefaultFinder
 from opticam.utils.constants import fwhm_scale
 from opticam.utils.fits_handlers import get_data
-from opticam.utils.helpers import camel_to_snake
+from opticam.utils.helpers import camel_to_snake, propagate_errors
 
 
 class BasePhotometer(ABC):
@@ -57,9 +57,10 @@ class BasePhotometer(ABC):
     def compute(
         self,
         image: NDArray,
-        image_err: NDArray | None,
+        dark_flux: float,
+        background_rms: NDArray | None,
         source_coords: NDArray,
-        image_coords: None | NDArray,
+        image_coords: NDArray | None,
         psf_params: Dict[str, float],
         ) -> Dict[str, List]:
         """
@@ -68,12 +69,14 @@ class BasePhotometer(ABC):
         Parameters
         ----------
         image : NDArray
-            The image. If `local_background_estimator` is undefined, this image will be background subtracted.
-        image_err : NDArray | None
-            The error in the image.
+            The image. If `self.local_background_estimator` is undefined, this image will be background subtracted.
+        dark_flux : float
+            The dark current's "flux" contribution.
+        background_rms : NDArray | None
+            The background RMS. May be `None` if `self.local_background_estimator` is defined.
         source_coords : NDArray
             The source coordinates in the catalogue.
-        image_coords : None | NDArray
+        image_coords : NDArray | None
             The source coordinates in the image. If `match_sources` is True, this will be used to match sources in the
             image to sources in the catalogue.
         psf_params : Dict[str, float]
@@ -228,7 +231,8 @@ class BasePhotometer(ABC):
         results: Dict[str, List],
         phot_function: Callable,
         image: NDArray,
-        image_err: NDArray,
+        dark_flux: float,
+        background_rms: NDArray | None,
         position: NDArray,
         psf_params: Dict[str, float],
         ) -> Dict[str, List]:
@@ -246,8 +250,10 @@ class BasePhotometer(ABC):
             the background and background error if `local_background_estimator` is defined.
         image : NDArray
             The image.
-        image_err : NDArray
-            The error in the image.
+        dark_flux : float
+            The dark current's "flux" contribution.
+        background_rms : NDArray | None
+            The background RMS. May be `None` if `self.local_background_estimator` is defined.
         position : NDArray
             The position of the source in the image.
         psf_params : Dict[str, float]
@@ -263,20 +269,22 @@ class BasePhotometer(ABC):
         
         if self.local_background_estimator is None:
             flux, flux_err = phot_function(
-                image,
-                image_err,
-                position,
-                psf_params,
+                image=image,
+                dark_flux=dark_flux,
+                background_rms=background_rms,
+                position=position,
+                psf_params=psf_params,
             )
             
             results['flux'].append(flux)
             results['flux_err'].append(flux_err)
         else:
             flux, flux_err, background, background_err = phot_function(
-                image,
-                image_err,
-                position,
-                psf_params,
+                image=image,
+                dark_flux=dark_flux,
+                background_rms=background_rms,
+                position=position,
+                psf_params=psf_params,
             )
             
             results['flux'].append(flux)
@@ -359,9 +367,10 @@ class AperturePhotometer(BasePhotometer):
     def compute(
         self,
         image: NDArray,
-        image_err: NDArray | None,
+        dark_flux: float,
+        background_rms: NDArray | None,
         source_coords: NDArray,
-        image_coords: None | NDArray,
+        image_coords: NDArray | None,
         psf_params: Dict[str, float],
         ) -> Dict[str, List]:
         """
@@ -370,12 +379,14 @@ class AperturePhotometer(BasePhotometer):
         Parameters
         ----------
         image : NDArray
-            The image. If `local_background_estimator` is undefined, this image will be background subtracted.
-        image_err : NDArray | None
-            The error in the image.
+            The image. If `self.local_background_estimator` is undefined, this image will be background subtracted.
+        dark_flux : float
+            The dark current's "flux" contribution.
+        background_rms : NDArray | None
+            The background RMS. May be `None` if `self.local_background_estimator` is defined.
         source_coords : NDArray
             The source coordinates in the catalogue.
-        image_coords : None | NDArray
+        image_coords : NDArray | None
             The source coordinates in the image. If `match_sources` is True, this will be used to match sources in the
             image to sources in the catalogue.
         psf_params : Dict[str, float]
@@ -408,32 +419,36 @@ class AperturePhotometer(BasePhotometer):
             
             # populate the results dictionary with the computed flux, flux error, and background (if applicable)
             results = self.populate_results_dict(
-                results,
-                self.compute_aperture_flux,
-                image,
-                image_err,
-                position,
-                psf_params,
+                results=results,
+                phot_function=self.compute_aperture_flux,
+                image=image,
+                dark_flux=dark_flux,
+                background_rms=background_rms,
+                position=position,
+                psf_params=psf_params,
                 )
         
         return results
 
     def compute_aperture_flux(
         self,
-        data: NDArray,
-        error: NDArray | None,
+        image: NDArray,
+        dark_flux: float,
+        background_rms: NDArray | None,
         position: NDArray,
         psf_params: Dict[str, float],
-        ) -> Tuple[float, float] | Tuple[float, float, float, float]:
+        ) -> Tuple[float, float, float] | Tuple[float, float, float, float, float]:
         """
         Compute the aperture flux of a source in the image.
         
         Parameters
         ----------
-        data : NDArray
+        image : NDArray
             The image.
-        error : NDArray | None
-            The error in the image.
+        dark_flux : float
+            The dark current's "flux" contribution.
+        background_rms : NDArray | None
+            The background RMS. May be `None` if `self.local_background_estimator` is defined.
         position : NDArray
             The position of the source.
         psf_params : Dict[str, float]
@@ -443,9 +458,9 @@ class AperturePhotometer(BasePhotometer):
         
         Returns
         -------
-        Tuple[float, float] | Tuple[float, float, float, float]
-            The flux and flux error. If `local_background_estimator` is defined, the background and its error are also
-            returned.
+        Tuple[float, float, float] | Tuple[float, float, float, float, float]
+            The flux, flux error, and signal-to-noise ratio. If `local_background_estimator` is defined, the background
+            and its error are also returned.
         """
         
         aperture = self.get_aperture(
@@ -454,29 +469,40 @@ class AperturePhotometer(BasePhotometer):
             )
         
         if self.local_background_estimator is None:
-            phot_table = aperture_photometry(data, aperture, error=error)
+            error = propagate_errors(
+                data=image,
+                dark_flux=dark_flux,
+                background_rms=np.asarray(background_rms),
+                )
+            phot_table = aperture_photometry(image, aperture, error=error)
             
-            return phot_table["aperture_sum"].value[0], phot_table["aperture_sum_err"].value[0]
+            flux = float(phot_table["aperture_sum"].value[0])
+            flux_err = float(phot_table["aperture_sum_err"].value[0])
+            
+            return flux, flux_err
         else:
             
-            # estimate local background in the annulus
-            local_background_per_pixel, local_background_error_per_pixel = self.local_background_estimator(
-                data,
+            local_background, local_background_rms = self.local_background_estimator(
+                image,
                 position,
                 psf_params['semimajor_sigma'],
                 psf_params['semiminor_sigma'],
                 psf_params['orientation'],
                 )
             
-            data_clean = data - local_background_per_pixel
-            clean_error = np.sqrt(data_clean + local_background_error_per_pixel**2)
+            data_clean = image - local_background
+            error = propagate_errors(
+                data=data_clean,
+                dark_flux=dark_flux,
+                background_rms=local_background_rms,
+            )
             
-            phot_table = aperture_photometry(data_clean, aperture, error=clean_error)
+            phot_table = aperture_photometry(data_clean, aperture, error=error)
             
-            flux = phot_table["aperture_sum"].value[0]
-            flux_error = phot_table["aperture_sum_err"].value[0]
+            flux = float(phot_table["aperture_sum"].value[0])
+            flux_err = float(phot_table["aperture_sum_err"].value[0])
             
-            return flux, flux_error, local_background_per_pixel, local_background_error_per_pixel
+            return flux, flux_err, local_background, local_background_rms
 
     def get_aperture(
         self,
@@ -531,9 +557,10 @@ class OptimalPhotometer(BasePhotometer):
     def compute(
         self,
         image: NDArray,
-        image_err: NDArray | None,
+        dark_flux: float,
+        background_rms: NDArray | None,
         source_coords: NDArray,
-        image_coords: None | NDArray,
+        image_coords: NDArray | None,
         psf_params: Dict[str, float],
         ) -> Dict[str, List]:
         """
@@ -542,12 +569,14 @@ class OptimalPhotometer(BasePhotometer):
         Parameters
         ----------
         image : NDArray
-            The image. If `local_background_estimator` is undefined, this image will be background subtracted.
-        image_err : NDArray
-            The error in the image.
+            The image. If `self.local_background_estimator` is undefined, this image will be background subtracted.
+        dark_flux : float
+            The dark current's "flux" contribution.
+        background_rms : NDArray | None
+            The background RMS. May be `None` if `self.local_background_estimator` is defined.
         source_coords : NDArray
             The source coordinates in the catalogue.
-        image_coords : None | NDArray
+        image_coords : NDArray | None
             The source coordinates in the image. If `match_sources` is True, this will be used to match sources in the
             image to sources in the catalogue.
         psf_params : Dict[str, float]
@@ -577,12 +606,13 @@ class OptimalPhotometer(BasePhotometer):
                 continue
             
             results = self.populate_results_dict(
-                results,
-                self.compute_optimal_flux,
-                image,
-                image_err,
-                position,
-                psf_params,
+                results=results,
+                phot_function=self.compute_optimal_flux,
+                image=image,
+                dark_flux=dark_flux,
+                background_rms=background_rms,
+                position=position,
+                psf_params=psf_params,
                 )
         
         return results
@@ -590,7 +620,8 @@ class OptimalPhotometer(BasePhotometer):
     def compute_optimal_flux(
         self,
         image: NDArray,
-        error: NDArray | None,
+        dark_flux: float,
+        background_rms: NDArray | None,
         position: NDArray,
         psf_params: Dict[str, float],
         ) -> Tuple[float, float] | Tuple[float, float, float, float]:
@@ -601,8 +632,10 @@ class OptimalPhotometer(BasePhotometer):
         ----------
         image : NDArray
             The image.
-        error : NDArray | None
-            The error in the image.
+        dark_flux : float
+            The dark current's "flux" contribution.
+        background_rms : NDArray | None
+            The background RMS. May be `None` if `self.local_background_estimator` is defined.
         position : NDArray
             The position of the source in the image, given as (y, x) coordinates.
         psf_params : Dict[str, float]
@@ -617,21 +650,25 @@ class OptimalPhotometer(BasePhotometer):
             returned.
         """
         
-        weights = self.get_weights(
-            width=image.shape[1],
-            height=image.shape[0],
+        if self.local_background_estimator is None:
+            error = propagate_errors(
+                data=image,
+                dark_flux=dark_flux,
+                background_rms=np.asarray(background_rms),
+                )
+            weights, norm = self.get_weights(
+            var=error**2,
             position=position,
             psf_params=psf_params,
             )
-        
-        if self.local_background_estimator is None:
-            flux = np.sum(image * weights)
-            flux_error = np.sqrt(np.sum((error * weights)**2))
+            
+            flux = np.sum(image * weights) / norm
+            flux_error = np.sqrt(1 / norm)
             
             return flux, flux_error
         else:
             # estimate local background using annulus
-            local_background_per_pixel, local_background_error_per_pixel = self.local_background_estimator(
+            local_background, local_background_rms = self.local_background_estimator(
                 image,
                 position,
                 psf_params['semimajor_sigma'],
@@ -639,30 +676,36 @@ class OptimalPhotometer(BasePhotometer):
                 psf_params['orientation'],
                 )
             
-            image_clean = image - local_background_per_pixel
-            clean_error = np.sqrt(image_clean + local_background_error_per_pixel**2)
+            image_clean = image - local_background
+            error = propagate_errors(
+                data=image_clean,
+                dark_flux=dark_flux,
+                background_rms=local_background_rms,
+                )
+            weights, norm = self.get_weights(
+            var=error**2,
+            position=position,
+            psf_params=psf_params,
+            )
             
-            flux = np.sum(image_clean * weights)
-            flux_error = np.sqrt(np.sum((clean_error * weights)**2))
+            flux = np.sum(image_clean * weights) / norm
+            flux_error = np.sqrt(1 / norm)
             
-            return flux, flux_error, local_background_per_pixel, local_background_error_per_pixel
+            return flux, flux_error, local_background, local_background_rms
 
     @staticmethod
     def get_weights(
-        width: int,
-        height: int,
+        var: NDArray,
         position: NDArray,
         psf_params: Dict[str, float],
-        ) -> NDArray:
+        ) -> Tuple[NDArray, float]:
         """
         Compute the optimal weight for each pixel in an image.
         
         Parameters
         ----------
-        width : int
-            The width of the image.
-        height : int
-            The height of the image.
+        var : NDArray
+            The variance image.
         position : NDArray
             The position of the source.
         psf_params : Dict[str, float]
@@ -670,12 +713,12 @@ class OptimalPhotometer(BasePhotometer):
         
         Returns
         -------
-        NDArray
-            The normalised weights.
+        Tuple[NDArray, float]
+            The weights and the normalisation constant.
         """
         
         # define pixel coordinates
-        y, x = np.ogrid[:height, :width]
+        y, x = np.ogrid[:var.shape[0], :var.shape[1]]
         
         theta = psf_params['orientation'] * np.pi / 180
         
@@ -684,9 +727,11 @@ class OptimalPhotometer(BasePhotometer):
         x_rot = (x - x0) * np.cos(theta) + (y - y0) * np.sin(theta)
         y_rot = -(x - x0) * np.sin(theta) + (y - y0) * np.cos(theta)
         
-        weights = np.exp(- .5 * ((x_rot / psf_params['semimajor_sigma'])**2 + (y_rot / psf_params['semiminor_sigma'])**2))
+        psf = np.exp(- .5 * ((x_rot / psf_params['semimajor_sigma'])**2 + (y_rot / psf_params['semiminor_sigma'])**2))
+        weights = psf / var
+        normalisation = np.sum(psf**2 / var)
         
-        return weights / np.sum(weights)
+        return weights, normalisation
 
 
 
@@ -750,7 +795,7 @@ def perform_photometry(
         The photometry results.
     """
     
-    image = get_data(
+    image, dark_flux = get_data(
         file=file,
         flat_corrector=flat_corrector,
         rebin_factor=rebin_factor,
@@ -760,12 +805,12 @@ def perform_photometry(
     if photometer.local_background_estimator is None:
         bkg = background(image)  # get 2D background
         image = image - bkg.background  # remove background from image
-        error = np.sqrt(image + bkg.background_rms**2)  # propagate error
         threshold = threshold * bkg.background_rms  # define source detection threshold
+        background_rms = bkg.background_rms.copy()
     else:
         # estimate source detection threshold from noisy image
         threshold = detect_threshold(image, threshold)  # type: ignore
-        error = None
+        background_rms = None
     
     image_coords = None  # assume no image coordinates by default
     if not photometer.forced:
@@ -778,7 +823,8 @@ def perform_photometry(
     
     results = photometer.compute(
         image=image,
-        image_err=error,
+        dark_flux=dark_flux,
+        background_rms=background_rms,
         source_coords=source_coords,
         image_coords=image_coords,
         psf_params=psf_params[fltr],
@@ -837,8 +883,9 @@ def get_growth_curve(
             )
         
         flux = photometer.compute_aperture_flux(
-            data=image,
-            error=image,
+            image=image,
+            dark_flux=0.,  # flux error not needed so dark flux not required
+            background_rms=0.,  # flux error not needed so background RMS not required
             position=position,
             psf_params={},  # empty dict since not needed
             )[0]
@@ -846,6 +893,5 @@ def get_growth_curve(
         fluxes.append(flux)
     
     return np.array(radii), np.array(fluxes)
-
 
 

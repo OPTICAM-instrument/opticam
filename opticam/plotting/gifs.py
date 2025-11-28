@@ -36,9 +36,8 @@ def create_gif_frame(
             file=file,
             flat_corrector=flat_corrector,
             rebin_factor=rebin_factor,
-            return_error=False,
             remove_cosmic_rays=remove_cosmic_rays,
-            )
+            )[0]
         )
     
     file_name = file.split('/')[-1].split(".")[0]

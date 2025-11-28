@@ -13,3 +13,4 @@ A Python package for reducing OPTICAM data.
    tutorials/local_backgrounds
    tutorials/finders
    tutorials/timing_methods
+   tutorials/visualisation

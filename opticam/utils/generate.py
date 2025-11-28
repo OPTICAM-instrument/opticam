@@ -21,6 +21,11 @@ PHASE_LAGS = {
     'i': np.pi,
 }
 
+MEDIAN_BKG = 100
+MEDIAN_BKG_RMS = np.sqrt(MEDIAN_BKG)
+MEDIAN_FLAT_FLUX = 10000
+MEDIAN_FLAT_FLUX_RMS = np.sqrt(10000)
+
 
 def two_dimensional_gaussian(
     image: NDArray,
@@ -99,7 +104,7 @@ def create_image(
     binning_scale: int,
     ) -> NDArray:
     """
-    Create a base image with Poisson noise.
+    Create a blank base image.
     
     Parameters
     ----------
@@ -112,21 +117,21 @@ def create_image(
         The noisy image.
     """
     
-    return np.zeros((int(2048 / binning_scale), int(2048 / binning_scale))) + 100
+    return np.zeros((2048 // binning_scale, 2048 // binning_scale))
 
-def add_noise(
+def poisson_noise(
     image: NDArray,
     i: int,
     ) -> NDArray:
     """
-    Add Poisson noise to an image.
+    Create a Poisson noise image.
     
     Parameters
     ----------
     image : NDArray
-        The image to add noise to.
+        The science image.
     i : int
-        The image index, used to seed the random number generator.
+        The RNG seed.
     
     Returns
     -------
@@ -136,7 +141,37 @@ def add_noise(
     
     rng = np.random.default_rng(i)
     
-    return rng.normal(image, np.sqrt(image))
+    return rng.normal(0, np.sqrt(image))
+
+def noisy_background(
+    image: NDArray,
+    i: int,
+    median: float | NDArray,
+    rms: float | NDArray,
+    ) -> NDArray:
+    """
+    Create a noisy background image.
+    
+    Parameters
+    ----------
+    image : NDArray
+        The science image. Used to determine the output image's shape.
+    i : int
+        The RNG seed.
+    median : float | NDArray
+        The median background.
+    rms : float | NDArray
+        The background RMS.
+    
+    Returns
+    -------
+    NDArray
+        The noisy background image.
+    """
+    
+    rng = np.random.default_rng(i)
+    
+    return rng.normal(median, rms, size=image.shape)
 
 def create_images(
     out_dir: str,
@@ -177,12 +212,10 @@ def create_images(
         if os.path.isfile(f"{out_dir}/240101{fltr}{200000000 + i}o.fits.gz") and not overwrite:
             continue
         
-        # generate image
+        # generate blank image
         image = create_image(binning_scale)
-        if circular_aperture:
-            image = apply_flat_field(image)  # apply circular aperture shadow
         
-        # PSF parameters (typical PSF stdev of ~6pix at 1x1 binning for good seeing)
+        # PSF parameters (typical PSF stdev of ~6pix at 1x1 binning for decent seeing)
         semimajor_sigma = 6 / (2048 / image.shape[0])
         semiminor_sigma = 6 / (2048 / image.shape[0])
         orientation = 0
@@ -217,15 +250,19 @@ def create_images(
                     orientation,
                     )
         
-        noisy_image = add_noise(image, i)  # add Poisson noise
+        image += poisson_noise(image, i)  # add shot noise
+        image += noisy_background(image, i, MEDIAN_BKG, MEDIAN_BKG_RMS)  # add background
+        
+        if circular_aperture:
+            image = apply_flat_field(image)  # apply circular aperture shadow
         
         # create fits file
-        hdu = fits.PrimaryHDU(noisy_image)
+        hdu = fits.PrimaryHDU(image)
         hdu.header["FILTER"] = fltr
         hdu.header["BINNING"] = f'{binning_scale}x{binning_scale}'
         hdu.header["GAIN"] = 1.
         hdu.header["EXPOSURE"] = 1.
-        hdu.header["DARKCURR"] = .1
+        hdu.header["DARKCURR"] = 0.
         
         # create observation pointing
         hdu.header['RA'] = 0.
@@ -304,13 +341,17 @@ def create_flats(
         if os.path.isfile(f"{out_dir}/{fltr}-band_image_{i}.fits.gz") and not overwrite:
             continue
         
-        # create flat-field image
-        image = create_image(binning_scale) * 100  # mean count rate = 100 * 100 = 10,000
+        image = create_image(binning_scale)
+        image += noisy_background(
+            image=image,
+            i=123 * (i + 123),
+            median=MEDIAN_FLAT_FLUX,
+            rms=MEDIAN_FLAT_FLUX_RMS,
+            )
         image = apply_flat_field(image)  # apply circular aperture shadow
-        noisy_image = add_noise(image, 123 * (i + 123))  # ensure different noise from observation images
         
         # create fits file
-        hdu = fits.PrimaryHDU(noisy_image)
+        hdu = fits.PrimaryHDU(image)
         hdu.header["FILTER"] = fltr
         hdu.header["BINNING"] = f'{binning_scale}x{binning_scale}'
         hdu.header["GAIN"] = 1.

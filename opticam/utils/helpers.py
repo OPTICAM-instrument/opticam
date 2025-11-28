@@ -1,6 +1,11 @@
+import os
 from typing import Any, Dict, List
 import re
-import os
+
+import numpy as np
+from numpy.typing import NDArray
+
+from opticam.utils.constants import n_read
 
 
 def camel_to_snake(
@@ -94,7 +99,34 @@ def create_file_paths(
     return file_paths
 
 
-
+def propagate_errors(
+    data: NDArray,
+    dark_flux: float,
+    background_rms: float | NDArray,
+    ) -> NDArray:
+    """
+    Propagate the shot noise, dark noise, sky noise, and read noise error contributions.
+    
+    Parameters
+    ----------
+    data : NDArray
+        The **dark-subtracted** and **background-subtracted** image.
+    dark_flux : float
+        The dark current's flux contribution.
+    background_rms : float | NDArray
+        The background RMS.
+    
+    Returns
+    -------
+    NDArray
+        The error.
+    """
+    
+    shot_noise_variance = np.clip(data, 0., None)  # clip negative values
+    
+    total_variance = shot_noise_variance + background_rms**2 + n_read**2 + dark_flux
+    
+    return np.sqrt(total_variance)
 
 
 

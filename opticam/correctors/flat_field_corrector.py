@@ -99,8 +99,8 @@ class FlatFieldCorrector:
             flats = []
             for flat_path in self.flat_paths[fltr]:
                 with fits.open(flat_path) as hdul:
-                    flat = np.array(hdul[0].data)
-                    flats.append(flat / np.median(flat))  # add normalised flat-field image to list
+                    flat = np.array(hdul[0].data, dtype=np.float64)
+                flats.append(flat / np.median(flat))  # add normalised flat-field image to list
             
             # create master flat
             master_flat = np.median(flats, axis=0)

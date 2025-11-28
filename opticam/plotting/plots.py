@@ -3,20 +3,21 @@ from typing import Callable, Dict, List
 
 from astropy.table import QTable
 from astropy.visualization import simple_norm
-from matplotlib.patches import Circle, Ellipse
+from matplotlib.patches import Circle, Ellipse, Rectangle
 from matplotlib import pyplot as plt
 from matplotlib.figure import Figure
 import numpy as np
 from numpy.typing import NDArray
 import pandas as pd
-from pandas import DataFrame
+from photutils.aperture import ApertureStats, BoundingBox
 
 from opticam.background.global_background import BaseBackground
 from opticam.noise import characterise_noise, get_snrs
-from opticam.photometers import get_growth_curve
+from opticam.photometers import AperturePhotometer, get_growth_curve
 from opticam.fitting.models import gaussian
 from opticam.fitting.routines import fit_rms_vs_flux
 from opticam.utils.constants import catalog_colors, fwhm_scale
+from opticam.utils.helpers import sort_filters
 
 
 def plot_catalogs(
@@ -201,10 +202,6 @@ def plot_time_between_files(
 
 def plot_backgrounds(
     out_directory: str,
-    camera_files: Dict[str, List[str]],
-    background_median: Dict[str, Dict[str, NDArray]],
-    background_rms: Dict[str, Dict[str, NDArray]],
-    bmjds: Dict[str, float],
     t_ref: float,
     show: bool,
     save: bool,
@@ -214,82 +211,70 @@ def plot_backgrounds(
     
     Parameters
     ----------
-    camera_files : Dict[str, str]
-        The files for each camera {fltr: file}.
-    background_median : Dict[str, List]
-        The median background for each camera.
-    background_rms : Dict[str, List]
-        The background RMS for each camera.
-    bmjds : Dict[str, float]
-        The Barycentric MJD dates for each image {file: BMJD}.
+    out_directory : str
+        The directory to which the background files, and where the resulting plot will be saved if `save=True`.
     t_ref : float
         The reference BMJD.
-    out_directory : str
-        The directory to which the resulting files will be saved.
     show: bool
         Whether to display the plot.
     save : bool
         Whether to save the plot.
     """
     
-    fig, axs = plt.subplots(
+    diag_files = os.listdir(os.path.join(out_directory, 'diag'))
+    
+    background_files = {}
+    for file in diag_files:
+        if file.endswith('_background.csv'):
+            fltr = file.split('_')[0]
+            background_files[fltr] = os.path.join(out_directory, f'diag/{file}')
+    background_files = sort_filters(background_files)
+    
+    fig, axes = plt.subplots(
         nrows=2,
-        ncols=len(camera_files),
+        ncols=len(background_files),
         tight_layout=True,
-        figsize=((2 * len(camera_files) / 3) * 6.4, 2 * 4.8),
+        figsize=(len(background_files) * 6.4, 1.5 * 4.8),
         sharex='col',
+        gridspec_kw={
+            'hspace': 0,
+            },
         )
     
     # for each camera
-    for fltr in list(camera_files.keys()):
-        
-        files = camera_files[fltr]  # get files for camera
-        
-        # skip cameras with no images
-        if len(files) == 0:
-            continue
-        
-        # get values from background_median and background_rms dicts
-        backgrounds = list(background_median[fltr].values())
-        rmss = list(background_rms[fltr].values())
+    for i, (fltr, file) in enumerate(background_files.items()):
+        df = pd.read_csv(file)
         
         # match times to background_median and background_rms keys
-        t = np.array([bmjds[file] for file in files if file in background_median[fltr]])
+        t = np.asarray(df['BMJD'].values)
         plot_times = (t - t_ref) * 86400  # convert time to seconds from first observation
         
-        if len(camera_files) == 1:
-            axs[0].set_title(fltr)
-            axs[0].plot(plot_times, backgrounds, "k.", ms=2)
-            axs[1].plot(plot_times, rmss, "k.", ms=2)
+        if len(background_files) == 1:
+            axes[0].set_title(fltr)
+            axes[0].plot(plot_times, df['median'].values, "k.", ms=2)
+            axes[1].plot(plot_times, df['rms'].values, "k.", ms=2)
             
-            axs[1].set_xlabel(f"Time from BMJD {t_ref:.4f} [s]")
-            axs[0].set_ylabel("Median background RMS")
-            axs[1].set_ylabel("Median background")
+            axes[1].set_xlabel(f"Time from BMJD {t_ref:.4f} [s]", fontsize='large')
+            axes[0].set_ylabel("Median background RMS", fontsize='large')
+            axes[1].set_ylabel("Median background", fontsize='large')
         else:
             # plot background
-            axs[0, list(camera_files.keys()).index(fltr)].set_title(fltr)
-            axs[0, list(camera_files.keys()).index(fltr)].plot(plot_times, backgrounds, "k.", ms=2)
-            axs[1, list(camera_files.keys()).index(fltr)].plot(plot_times, rmss, "k.", ms=2)
+            axes[0, i].set_title(fltr, fontsize='large')
+            axes[0, i].plot(plot_times, df['median'].values, "k.", ms=2)
+            axes[1, i].plot(plot_times, df['rms'].values, "k.", ms=2)
             
-            for col in range(len(camera_files)):
-                axs[1, col].set_xlabel(f"Time from BMJD {t_ref:.4f} [s]")
+            for col in range(len(background_files)):
+                axes[1, col].set_xlabel(f"Time from BMJD {t_ref:.4f} [s]", fontsize='large')
             
-            axs[0, 0].set_ylabel("Median background")
-            axs[1, 0].set_ylabel("Median background RMS")
-        
-        # write background to file
-        DataFrame({
-            'BMJD': t,
-            'RMS': backgrounds,
-            'median': rmss
-        }).to_csv(os.path.join(out_directory, f'diag/{fltr}_background.csv'), index=False)
+            axes[0, 0].set_ylabel("Median background", fontsize='large')
+            axes[1, 0].set_ylabel("Median background RMS", fontsize='large')
     
-    for ax in axs.flatten():
+    for ax in axes.flatten():
         ax.minorticks_on()
         ax.tick_params(which="both", direction="in", top=True, right=True)
     
     if save:
-        fig.savefig(os.path.join(out_directory, "diag/background.png"))
+        fig.savefig(os.path.join(out_directory, "diag/background.pdf"))
     
     if show:
         plt.show()
@@ -300,47 +285,65 @@ def plot_backgrounds(
 
 def plot_background_meshes(
     out_directory: str,
-    filters: List[str],
-    stacked_images: Dict[str, NDArray],
+    images: Dict[str, NDArray],
     background: BaseBackground,
     show: bool,
     save: bool,
     ) -> None:
     """
-    Plot the background meshes on top of the catalog images.
+    Plot the background mesh on top of some images.
     
     Parameters
     ----------
-    stacked_images : Dict[str, NDArray]
-        The stacked images for each camera.
+    out_directory : str
+        The path to the output directory.
+    images : Dict[str, NDArray]
+        The images. The keys should give the filters (or file names) and the values should be the images.
+    background: BaseBackground
+        The background estimator.
     show : bool
-        Whether to display the plot.
+        Whether to show the plot.
+    save : bool
+        Whether to save the plot.
     """
     
-    ncols = len(filters)
+    ncols = len(images)
     fig, axes = plt.subplots(ncols=ncols, tight_layout=True, figsize=(ncols * 5, 5))
     
     if ncols == 1:
         # convert axes to list
         axes = [axes]
     
-    for i, fltr in enumerate(filters):
+    for i, (label, image) in enumerate(images.items()):
         
-        plot_image = np.clip(stacked_images[fltr], 0, None)
-        bkg = background(stacked_images[fltr])
+        # clip negative values
+        plot_image = np.clip(image, 0., None)
+        
+        bkg = background(image)
         
         # plot background mesh
-        axes[i].imshow(plot_image, origin="lower", cmap="Greys", interpolation="nearest",
-                        norm=simple_norm(plot_image, stretch="log"))
-        bkg.plot_meshes(ax=axes[i], outlines=True, marker='.', color='red', alpha=0.3)
+        axes[i].imshow(
+            plot_image,
+            origin="lower",
+            cmap="Greys",
+            interpolation="nearest",
+            norm=simple_norm(plot_image, stretch="log"),
+            )
+        bkg.plot_meshes(
+            ax=axes[i],
+            outlines=True,
+            marker='.',
+            color='red',
+            alpha=0.3,
+            )
         
         #label plot
-        axes[i].set_title(fltr)
+        axes[i].set_title(label)
         axes[i].set_xlabel("X")
         axes[i].set_ylabel("Y")
     
     if save:
-        fig.savefig(os.path.join(out_directory, "diag/background_meshes.png"))
+        fig.savefig(os.path.join(out_directory, 'diag/background_meshes.pdf'))
     
     if show:
         plt.show(fig)
@@ -396,16 +399,19 @@ def plot_growth_curves(
         sharey='row',
     )
     
-    if n > 1:
+    if rows > 1 and cols > 1:
         for row in axes:
             row[0].set_ylabel('Flux [%]', fontsize='large')
+    elif cols > 1:
+        for col in axes:
+            col.set_ylabel('Flux [%]', fontsize='large')
     else:
         axes.set_ylabel('Flux [%]', fontsize='large')
     
     axes = np.asarray([axes]).flatten()
     
     for target in targets:
-        i = target - 1  # index is just target ID - 1
+        i = targets.index(target)
         
         radii, fluxes = get_growth_curve(
             image=image,
@@ -427,7 +433,7 @@ def plot_growth_curves(
         secax.minorticks_on()
         secax.tick_params(which='both', direction='in')
         
-        axes[i].set_title(f'Source {i + 1}', fontsize='large')
+        axes[i].set_title(f'Source {target}', fontsize='large')
         axes[i].set_xlabel('Radius [pixels]', fontsize='large')
         
         axes[i].minorticks_on()
@@ -620,11 +626,13 @@ def plot_rms_vs_median_flux(
         )
     pl_fits = fit_rms_vs_flux(data)
     
+    assert len(pl_fits) >= 1, f"[OPTICAM] No valid light curve files found in {lc_dir}."
+    
     fig, axes = plt.subplots(
         nrows=2,
-        ncols=3,
+        ncols=len(pl_fits),
         tight_layout=True,
-        figsize=(15, 5),
+        figsize=(5 * len(pl_fits), 5),
         sharex='col',
         gridspec_kw={
             'hspace': 0,
@@ -634,14 +642,26 @@ def plot_rms_vs_median_flux(
     
     for fltr in data.keys():
         if fltr in ['u-band', 'g-band']:
-            ax1 = axes[0][0]
-            ax2 = axes[1][0]
+            if len(pl_fits) == 1:
+                ax1 = axes[0]
+                ax2 = axes[1]
+            else:
+                ax1 = axes[0][0]
+                ax2 = axes[1][0]
         elif fltr in ['r-band']:
-            ax1 = axes[0][1]
-            ax2 = axes[1][1]
+            if len(pl_fits) == 1:
+                ax1 = axes[0]
+                ax2 = axes[1]
+            else:
+                ax1 = axes[0][1]
+                ax2 = axes[1][1]
         elif fltr in ['i-band', 'z-band']:
-            ax1 = axes[0][2]
-            ax2 = axes[1][2]
+            if len(pl_fits) == 1:
+                ax1 = axes[0]
+                ax2 = axes[1]
+            else:
+                ax1 = axes[0][2]
+                ax2 = axes[1][2]
         else:
             raise ValueError(f'[OPTICAM] Unrecognised filter: {fltr}.')
         
@@ -799,7 +819,8 @@ def plot_snrs(
     background: BaseBackground | Callable,
     psf_params: Dict[str, Dict[str, float]],
     catalogs: Dict[str, QTable],
-    show: bool = False,
+    show: bool,
+    save: bool,
     ):
     """
     Plot the S/N for each source.
@@ -818,8 +839,10 @@ def plot_snrs(
         The catalogs for each filter {filter: catalog}.
     photometer : BasePhotometer
         The photometer to use for measuring noise.
-    show : bool, optional
-        Whether to show the plot, by default `False`.
+    show : bool
+        Whether to show the plot.
+    save : bool
+        Whether to save the plot.
     """
     
     fig, axes = plt.subplots(
@@ -873,10 +896,11 @@ def plot_snrs(
         ax.minorticks_on()
         ax.tick_params(which='both', direction='in', right=True, top=True)
     
-    fig.savefig(
-        os.path.join(out_directory, 'diag/snrs.pdf'),
-        bbox_inches='tight',
-        )
+    if save:
+        fig.savefig(
+            os.path.join(out_directory, 'diag/snrs.pdf'),
+            bbox_inches='tight',
+            )
     
     if show:
         plt.show()
@@ -890,7 +914,8 @@ def plot_noise(
     background: BaseBackground | Callable,
     psf_params: Dict[str, Dict[str, float]],
     catalogs: Dict[str, QTable],
-    show: bool = False,
+    show: bool,
+    save: bool,
     ):
     """
     Plot the various noise contributions and compare them to the measured noise for a series of images.
@@ -909,8 +934,10 @@ def plot_noise(
         The catalogs for each filter {filter: catalog}.
     photometer : BasePhotometer
         The photometer to use for measuring noise.
-    show : bool, optional
-        Whether to show the plot, by default `False`.
+    show : bool
+        Whether to show the plot.
+    save : bool
+        Whether to save the plot.
     """
     
     fig, axes = plt.subplots(
@@ -955,13 +982,19 @@ def plot_noise(
             results['measured_mags'],
             results['measured_noise'] / results['expected_measured_noise'],
         )
+        axes[1][i].fill_between(
+            axes[1][i].set_xlim(),
+            [1.05, 1.05],
+            [.95, .95],
+            color='grey',
+            edgecolor='none',
+            alpha=.5,
+            )
         
         axes[0][i].set_yscale('log')
-        axes[0][i].set_ylabel('$\\sigma_{\\rm mag}$', fontsize='large')
         axes[0][i].set_title(fltr, fontsize='large')
         
         axes[1][i].set_xlabel('-2.5 log(counts)', fontsize='large')
-        axes[1][i].set_ylabel('$\\frac{\\sigma_{\\rm measured}}{\\sigma_{\\rm expected}}$', fontsize='xx-large')
     
     for ax in axes.flatten():
         ax.minorticks_on()
@@ -969,6 +1002,9 @@ def plot_noise(
     
     for ax in axes[0, :]:
         ax.invert_xaxis()
+    
+    axes[0, 0].set_ylabel('$\\sigma_{\\rm mag}$', fontsize='large')
+    axes[1, 0].set_ylabel('$\\frac{\\sigma_{\\rm measured}}{\\sigma_{\\rm expected}}$', fontsize='xx-large')
     
     fig.legend(
         *axes[0, 0].get_legend_handles_labels(),
@@ -978,10 +1014,11 @@ def plot_noise(
         bbox_transform=fig.transFigure,
         )
     
-    fig.savefig(
-        os.path.join(out_directory, 'diag/noise_characterisation.pdf'),
-        bbox_inches='tight',
-        )
+    if save:
+        fig.savefig(
+            os.path.join(out_directory, 'diag/noise_characterisation.pdf'),
+            bbox_inches='tight',
+            )
     
     if show:
         plt.show()
@@ -989,7 +1026,254 @@ def plot_noise(
         plt.close(fig)
 
 
+def plot_apertures(
+    out_directory: str,
+    data: NDArray,
+    cat: QTable,
+    targets: List[int] | int,
+    photometer: AperturePhotometer,
+    psf_params: Dict[str, float],
+    fltr: str,
+    show: bool,
+    save: bool,
+    ):
+    """
+    Plot the specified aperture over each target source.
+    
+    Parameters
+    ----------
+    out_directory : str
+        The output directory. Used to save the plot if `save=True`.
+    data : NDArray
+        The image data.
+    cat : QTable
+        The source catalog.
+    targets : List[int] | int
+        The target IDs to plot apertures for.
+    photometer : AperturePhotometer
+        The `AperturePhotometer` instance.
+    psf_params : Dict[str, float]
+        The PSF parameters.
+    fltr : str
+        The image filter.
+    show : bool
+        Whether to show the plot.
+    save : bool
+        Whether to save the plot. If true, the plot is saved to `out_directory/diag/apertures/fltr_apertures.pdf`.
+    """
+    
+    if isinstance(targets, int):
+        targets = [targets]
+    
+    n = len(targets)
+    ncols = int(np.ceil(np.sqrt(n)))
+    nrows = int(np.ceil(n / ncols))
+    
+    fig, axes = plt.subplots(
+        nrows=nrows,
+        ncols=ncols,
+        figsize=(ncols * 3, nrows * 3),
+        tight_layout=True,
+    )
+    
+    axes = np.asarray([axes]).flatten()
+    
+    region_size = get_max_region_size(
+        targets=targets,
+        photometer=photometer,
+        data=data,
+        cat=cat,
+        psf_params=psf_params,
+    )
+    
+    for i, target in enumerate(targets):
+        cat_indx = target - 1
+        position = [cat['xcentroid'][cat_indx], cat['ycentroid'][cat_indx]]
+        theta = cat['orientation'][cat_indx].value
+        
+        aperture = photometer.get_aperture(
+            position=position,
+            psf_params=psf_params,
+            )
+        
+        if photometer.local_background_estimator is not None:
+            annulus_stats = photometer.local_background_estimator.get_stats(
+                data=data,
+                position=position,
+                semimajor_axis=psf_params['semimajor_sigma'],
+                semiminor_axis=psf_params['semiminor_sigma'],
+                theta=theta * np.pi / 180,  # radians
+                )
+            bbox = annulus_stats.bbox
+            
+            padding = region_size // 10
+        else:
+            aperture_stats = ApertureStats(
+                data=data,
+                aperture=aperture,
+            )
+            bbox = aperture_stats.bbox
+            
+            padding = region_size // 4
+        
+        ixmin = max(0, bbox.ixmin - padding)
+        ixmax = min(data.shape[1], bbox.ixmin + region_size + padding)
+        dx = bbox.ixmin - ixmin
+        
+        iymin = max(0, bbox.iymin - padding)
+        iymax = min(data.shape[0], bbox.iymin + region_size + padding)
+        dy = bbox.iymin - iymin
+        
+        bbox = BoundingBox(
+            ixmin=ixmin,
+            ixmax=ixmax,
+            iymin=iymin,
+            iymax=iymax,
+            )
+        
+        # get region of interest
+        region = data[bbox.iymin:bbox.iymax, bbox.ixmin:bbox.ixmax]
+        centre = [position[0] - bbox.ixmin, position[1] - bbox.iymin]  # centre of region
+        
+        axes[i].imshow(region, origin='lower', cmap='Greys', norm=simple_norm(region, stretch='log'))
+        
+        if photometer.local_background_estimator is not None:
+            
+            annulus_mask = np.asarray(annulus_stats.data_cutout).astype(bool)
+            
+            # factor of 2 since matplotlib assumes diameter
+            annulus_inner_width = 2 * photometer.local_background_estimator.r_in_scale * psf_params['semimajor_sigma']
+            annulus_outer_width = 2 * photometer.local_background_estimator.r_out_scale * psf_params['semimajor_sigma']
+            annulus_inner_height = 2 * photometer.local_background_estimator.r_in_scale * psf_params['semiminor_sigma']
+            annulus_outer_height = 2 * photometer.local_background_estimator.r_out_scale * psf_params['semiminor_sigma']
+            
+            for coord in np.argwhere(annulus_mask):
+                row, col = coord
+                
+                # offset coords to fit within bbox region
+                row += dy
+                col += dx
+                
+                rect = Rectangle((col - 0.5, row - 0.5), 1, 1, linewidth=1, edgecolor='red', facecolor='none')
+                circ = Circle((col, row), .1, linewidth=1, edgecolor='red', facecolor='none')
+                axes[i].add_patch(rect)
+                axes[i].add_patch(circ)
+            
+            inner_ellipse = Ellipse(centre,
+                                    width=annulus_inner_width,
+                                    height=annulus_inner_height,
+                                    angle=theta,
+                                    facecolor='none',
+                                    edgecolor='blue',
+                                    lw=1,
+                                    ls='--',
+                                    )
+            axes[i].add_patch(inner_ellipse)
 
+            outer_ellipse = Ellipse(centre,
+                                    width=annulus_outer_width,
+                                    height=annulus_outer_height,
+                                    angle=theta,
+                                    facecolor='none',
+                                    edgecolor='blue',
+                                    lw=1,
+                                    ls='--',
+                                    )
+            axes[i].add_patch(outer_ellipse)
+        
+        aperture_ellipse = Ellipse(
+            centre,
+            width=2 * aperture.a,
+            height=2 * aperture.b,
+            angle=theta,
+            facecolor='none',
+            edgecolor='blue',
+            lw=1,
+            ls='-',
+            )
+        axes[i].add_patch(aperture_ellipse)
+        
+        axes[i].set_xlabel('X', fontsize='large')
+        axes[i].set_ylabel('Y', fontsize='large')
+        axes[i].set_title(f'Source {target}', fontsize='large')
+    
+    fig.suptitle(fltr)
+    
+    if save:
+        save_path = os.path.join(out_directory, 'diag/apertures')
+        if not os.path.isdir(save_path):
+            os.makedirs(save_path)
+        fig.savefig(os.path.join(save_path, f'{fltr}_apertures.pdf'))
+    
+    if show:
+        plt.show(fig)
+    else:
+        fig.clear()
+        plt.close(fig)
+
+def get_max_region_size(
+    targets: List[int],
+    photometer: AperturePhotometer,
+    data: NDArray,
+    cat: QTable,
+    psf_params: Dict[str, float],
+    ) -> int:
+    """
+    Get the maximum region size for plotting apertures.
+    
+    Parameters
+    ----------
+    targets : List[int]
+        The target source IDs.
+    photometer : AperturePhotometer
+        The `AperturePhotometer` instance.
+    data : NDArray
+        The image data.
+    cat : QTable
+        The source catalog.
+    psf_params : Dict[str, float]
+        The PSF parameters.
+    
+    Returns
+    -------
+    int
+        The maximum region size.
+    """
+    
+    region_sizes = []
+    
+    for target in targets:
+        i = targets.index(target)
+        position = [cat['xcentroid'][i], cat['ycentroid'][i]]
+        
+        aperture = photometer.get_aperture(
+            position=position,
+            psf_params=psf_params,
+            )
+        
+        if photometer.local_background_estimator is not None:
+            annulus_stats = photometer.local_background_estimator.get_stats(
+                data=data,
+                position=position,
+                semimajor_axis=psf_params['semimajor_sigma'],
+                semiminor_axis=psf_params['semiminor_sigma'],
+                theta=psf_params['orientation'],
+                )
+            
+            bbox = annulus_stats.bbox
+        else:
+            aperture_stats = ApertureStats(
+                data=data,
+                aperture=aperture,
+                )
+            
+            bbox = aperture_stats.bbox
+        
+        width = bbox.ixmax - bbox.ixmin
+        height = bbox.iymax - bbox.iymin
+        region_sizes.append(max(width, height))
+    
+    return max(region_sizes)
 
 
 

@@ -29,6 +29,7 @@ class Analyzer:
         self,
         out_directory: str,
         light_curves: Dict[str, Lightcurve | DataFrame] | None = None,
+        norm: Literal['max', 'mean', 'none'] = 'mean',
         prefix: str | None = None,
         phot_label: str | None = None,
         show_plots: bool = True,
@@ -45,6 +46,9 @@ class Analyzer:
             The light curves to analyze, where the keys are the filter names and the values are either Lightcurve
             objects or DataFrames containing 'BMJD', 'rel_flux', and 'rel_flux_err' columns. Leave as `None` to create an
             empty analyzer that can be populated later using the `join()` method.
+        norm : Literal['max', 'mean', 'none'], optional
+            The light curve normalisation, by default 'mean'. 'max' normalises the fluxes to a maximum flux of 1, 'mean'
+            normalises the fluxes to a mean flux of 1, and 'none' applies no normalisation.
         prefix : str | None, optional
             The prefix to use for the output files (e.g., the name of the target source).
         phot_label : str, optional
@@ -53,7 +57,8 @@ class Analyzer:
             Whether to render and show plots, by default `True`.
         """
         
-        self.light_curves = validate_light_curves(light_curves)
+        self.norm = norm
+        self.light_curves = validate_light_curves(light_curves, norm=self.norm)
         
         self.out_directory = out_directory
         if not os.path.isdir(out_directory):
@@ -96,12 +101,12 @@ class Analyzer:
         
         assert analyzer.light_curves, f'[OPTICAM] cannot join an empty analyzer.'
         
-        new_light_curves = copy.copy(self.light_curves)
+        new_light_curves = copy.deepcopy(self.light_curves)
         
         for fltr in analyzer.light_curves.keys():
             if fltr not in self.light_curves.keys():
                 # if a new filter is being added, copy the light curve
-                new_light_curves[fltr] = copy.copy(analyzer.light_curves[fltr])
+                new_light_curves[fltr] = copy.deepcopy(analyzer.light_curves[fltr])
             else:
                 # if an existing filter is being added, merge the light curves
                 new_light_curves[fltr] = self.light_curves[fltr].join(analyzer.light_curves[fltr])
@@ -109,6 +114,7 @@ class Analyzer:
         return Analyzer(
             out_directory=self.out_directory,
             light_curves=new_light_curves,  # type: ignore
+            norm=self.norm,  # type: ignore
             prefix=self.prefix,
             phot_label=self.phot_label,
             show_plots=self.show_plots,
@@ -686,6 +692,7 @@ class Analyzer:
 
 def validate_light_curves(
     light_curves: Dict[str, Lightcurve | DataFrame] | None,
+    norm: Literal['max', 'mean', 'none'],
     ) -> Dict[str, Lightcurve]:
     """
     Validate the light curves by converting DataFrames to Lightcurve objects and inferring GTIs.
@@ -696,6 +703,9 @@ def validate_light_curves(
         The light curves to validate, where the keys are the filter names and the values are either Lightcurve
         objects or DataFrames containing 'BMJD', 'rel_flux', and 'rel_flux_err' columns. If `None`, an empty
         dictionary will be returned.
+    norm : Literal['max', 'mean', 'none'], optional
+        The light curve normalisation. 'max' normalises the fluxes to a maximum flux of 1, 'mean' normalises the fluxes 
+        to a mean flux of 1, and 'none' applies no normalisation.
     
     Returns
     -------
@@ -723,10 +733,10 @@ def validate_light_curves(
             else:
                 raise TypeError(f'[OPTICAM] Light curve for filter {fltr} must be either a DataFrame or a Lightcurve object, but got {type(light_curves[fltr])}.')
             
-            # normalise flux
-            mean_flux = np.mean(counts)
-            counts /= mean_flux
-            counts_err /= mean_flux
+            # apply normalisation
+            factor = get_norm_factor(norm, counts)
+            counts /= factor
+            counts_err /= factor
             
             validated_light_curves[fltr] = Lightcurve(
                 time,
@@ -768,6 +778,36 @@ def convert_lc_time_to_seconds(
         gti=gti,
         err_dist=lc.err_dist,
     )
+
+def get_norm_factor(
+    norm: Literal['max', 'mean', 'none'],
+    fluxes: NDArray,
+    ) -> float:
+    """
+    Compute the specified normalisation factor for the given fluxes.
+    
+    Parameters
+    ----------
+    norm : Literal['max', 'mean', 'none'], optional
+        The light curve normalisation. 'max' normalises the fluxes to a maximum flux of 1, 'mean' normalises the fluxes 
+        to a mean flux of 1, and 'none' applies no normalisation.
+    fluxes : NDArray
+        The light curve fluxes.
+    
+    Returns
+    -------
+    float
+        The normalisation factor.
+    """
+    
+    if norm == 'none':
+        return 1.
+    elif norm == 'max':
+        return float(np.max(fluxes))
+    elif norm == 'mean':
+        return float(np.mean(fluxes))
+    else:
+        raise ValueError(f'[OPTICAM] norm={norm} is not supported.')
 
 
 def plot(

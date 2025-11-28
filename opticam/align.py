@@ -63,12 +63,7 @@ def align_batch(
     finder: DefaultFinder,
     threshold: float | int,
     logger: Logger,
-    ) -> Tuple[
-        NDArray,
-        Dict[str, float],
-        Dict[str, float],
-        Dict[str, float],
-        ]:
+    ) -> Tuple[NDArray, Dict[str, float], Dict[str, Dict[str, float]]]:
     """
     Align an image based on some reference coordinates.
     
@@ -93,14 +88,13 @@ def align_batch(
     
     Returns
     -------
-    Tuple[List[float], float, float]
-        The transform parameters, background median, and background RMS.
+    Tuple[NDArray, Dict[str, float], Dict[str, Dict[str, float]]]
+        The stacked image, transforms, and background results.
     """
     
     stacked_image = np.zeros(reference_image_shape)  # create empty stacked image
     transforms = {}
-    background_medians = {}
-    background_rmss = {}
+    bkg_dict = {}
     
     for file in batch:
         data = get_data(
@@ -108,12 +102,10 @@ def align_batch(
             flat_corrector=flat_corrector,
             rebin_factor=rebin_factor,
             remove_cosmic_rays=remove_cosmic_rays,
-            )
+            )[0]
         
         # calculate and subtract background
         bkg = background(data)
-        background_median = bkg.background_median
-        background_rms = bkg.background_rms_median
         
         # identify sources
         try:
@@ -156,8 +148,10 @@ def align_batch(
             continue
         
         transforms[file] = transform.params.tolist()  # type: ignore
-        background_medians[file] = background_median
-        background_rmss[file] = background_rms
+        bkg_dict[file] = {
+            'Median': bkg.background_median,
+            'RMS': bkg.background_rms_median,
+            }
         
         # transform and stack image
         stacked_image += warp(
@@ -171,7 +165,7 @@ def align_batch(
             preserve_range=True,
             )
     
-    return stacked_image, transforms, background_medians, background_rmss
+    return stacked_image, transforms, bkg_dict
 
 
 def valid_transform(

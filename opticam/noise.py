@@ -1,30 +1,28 @@
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, Dict, Tuple
 
-from astropy.units import Quantity
 from astropy.table import QTable
-from astropy import units as u
 import numpy as np
 from numpy.typing import NDArray
 
 from opticam.background.global_background import BaseBackground
 from opticam.photometers import AperturePhotometer
-from opticam.utils.constants import counts_to_mag_factor
+from opticam.utils.constants import counts_to_mag_factor, n_read
 from opticam.utils.fits_handlers import get_image_noise_info
 
 
 def get_source_photons(
-    N_source: Quantity,
-    gain: Quantity,
-    ) -> float:
+    N_source: float | NDArray,
+    gain: float,
+    ) -> float | NDArray:
     """
     Get the number of source photons.
     
     Parameters
     ----------
-    N_source : Quantity
-        The number of source counts [ADU].
-    gain : Quantity
-        The gain [photons/ADU].
+    N_source : float | NDArray
+        The number of source counts.
+    gain : float
+        The gain.
     
     Returns
     -------
@@ -32,21 +30,21 @@ def get_source_photons(
         The number of source photons.
     """
     
-    return (N_source * gain).to_value(u.ph)
+    return N_source * gain
 
 def get_sky_photons_per_pixel(
-    n_sky: Quantity,
-    gain: Quantity,
+    n_sky: float,
+    gain: float,
     ) -> float:
     """
     Get the number of sky photons per pixel.
     
     Parameters
     ----------
-    n_sky : Quantity
-        The sky counts per unit pixel [ADU/pix].
-    gain : Quantity
-        The gain [photons/ADU].
+    n_sky : float
+        The sky counts per pixel.
+    gain : float
+        The gain.
     
     Returns
     -------
@@ -54,68 +52,27 @@ def get_sky_photons_per_pixel(
         The number of sky photons per pixel.
     """
     
-    return (n_sky * gain).to_value(u.ph / u.pix)
-
-def get_dark_counts_per_pixel(
-    dark_curr: Quantity,
-    t_exp: Quantity,
-    ) -> float:
-    """
-    Get the number of dark counts per pixel.
-    
-    Parameters
-    ----------
-    dark_curr : Quantity
-        The dark current [ADU/pixel/second]
-    t_exp : Quantity
-        The exposure time [seconds].
-    
-    Returns
-    -------
-    float
-        The number of dark counts per pixel.
-    """
-    
-    return (dark_curr * t_exp).to_value(u.adu / u.pix)
-
-def get_read_counts_per_pixel(
-    n_read: Quantity,
-    ) -> float:
-    """
-    Get the read noise per pixel.
-    
-    Parameters
-    ----------
-    n_read : Quantity
-        The number of counts due to read noise per pixel [ADU/pixel].
-    
-    Returns
-    -------
-    float
-        The read noise per pixel.
-    """
-    
-    return n_read.to_value(u.adu / u.pix)
+    return n_sky * gain
 
 
 def get_sky_stderr(
-    N_source: Quantity,
-    N_pix: Quantity,
-    n_sky: Quantity,
-    gain: Quantity,
+    N_source: float,
+    N_pix: float,
+    n_sky: float,
+    gain: float,
     ) -> float:
     """
     Get the standard error (in magnitudes) of the sky noise.
     
     Parameters
     ----------
-    N_source : Quantity
+    N_source : float
         The total number of source counts.
     N_pix : int
         The number of aperture pixels.
-    n_sky : Quantity
+    n_sky : float
         The number of sky counts **per pixel**.
-    gain: Quantity
+    gain: float
         The detector gain.
     
     Returns
@@ -127,22 +84,22 @@ def get_sky_stderr(
     source_photons = get_source_photons(N_source=N_source, gain=gain)
     sky_photons_per_pix = get_sky_photons_per_pixel(n_sky=n_sky, gain=gain)
     
-    p_sky = N_pix.value * sky_photons_per_pix
+    p_sky = N_pix * sky_photons_per_pix
     
     return counts_to_mag_factor * np.sqrt(p_sky) / source_photons
 
 def get_shot_stderr(
-    N_source: Quantity,
-    gain: Quantity,
+    N_source: float,
+    gain: float,
     ) -> float:
     """
     Get the standard error (in magnitudes) of the shot noise.
     
     Parameters
     ----------
-    N_source : Quantity
+    N_source : float
         The total number of source counts.
-    gain: Quantity
+    gain: float
         The detector gain.
     
     Returns
@@ -156,11 +113,10 @@ def get_shot_stderr(
     return counts_to_mag_factor * np.sqrt(source_photons) / source_photons
 
 def get_dark_stderr(
-    N_source: Quantity,
-    N_pix: Quantity,
-    n_dark: Quantity,
-    t_exp: Quantity,
-    gain: Quantity,
+    N_source: float,
+    N_pix: float,
+    dark_flux: float,
+    gain: float,
     ) -> float:
     """
     Get the standard error (in magnitudes) of the dark current noise.
@@ -185,30 +141,26 @@ def get_dark_stderr(
     """
     
     source_photons = get_source_photons(N_source=N_source, gain=gain)
-    dark_counts_per_pixel = get_dark_counts_per_pixel(dark_curr=n_dark, t_exp=t_exp)
     
-    p_dark = N_pix.value * dark_counts_per_pixel
+    p_dark = N_pix * dark_flux
     
     return counts_to_mag_factor * np.sqrt(p_dark) / source_photons
 
 def get_read_stderr(
-    N_source: Quantity,
-    N_pix: Quantity,
-    n_read: Quantity,
-    gain: Quantity,
+    N_source: float,
+    N_pix: float,
+    gain: float,
     ) -> float:
     """
     Get the standard error (in magnitudes) of the readout noise.
     
     Parameters
     ----------
-    N_source : Quantity
+    N_source : float
         The total number of source counts.
-    N_pix : int
+    N_pix : float
         The number of aperture pixels.
-    n_read : Quantity
-        The number of electrons **per pixel** due to read noise.
-    gain: Quantity
+    gain: float
         The detector gain.
     
     Returns
@@ -218,103 +170,81 @@ def get_read_stderr(
     """
     
     source_photons = get_source_photons(N_source=N_source, gain=gain)
-    read_counts_per_pixel = get_read_counts_per_pixel(n_read=n_read)
     
-    p_read = N_pix.value * read_counts_per_pixel**2
+    p_read = N_pix * n_read**2
     
     return counts_to_mag_factor * np.sqrt(p_read) / source_photons
 
 
 def snr(
-    N_source: Quantity,
-    N_pix: Quantity,
-    N_bkg: Quantity,
-    n_sky: Quantity,
-    dark_curr: Quantity,
-    n_read: Quantity,
-    t_exp: Quantity,
-    gain: Quantity,
-    ) -> float:
+    N_source: float | NDArray,
+    N_pix: float,
+    n_sky: float,
+    dark_flux: float,
+    gain: float,
+    ) -> float | NDArray:
     """
     The (simplified) S/N ratio equation or CCD Equation (see Chapter 4.4 of Handbook of CCD Astronomy by Howell, 2006).
     
     Parameters
     ----------
-    N_source : Quantity
+    N_source : float | NDArray
         The total number of source counts.
     N_pix : int
         The number of aperture pixels.
-    N_bkg : Quantity
-        The number of pixels used to estimate the background.
-    n_sky : Quantity
+    n_sky : float
         The number of sky counts **per pixel**.
-    dark_curr : Quantity
-        The number of dark current electrons **per pixel per unit time**. 
-    n_read : Quantity
-        The number of electrons **per pixel** due to read noise.
-    t_exp: Quantity
-        The exposure time.
-    gain: Quantity
+    dark_flux : float
+        The dark current's "flux" contribution per pixel.
+    gain: float
         The detector gain.
     
     Returns
     -------
-    float
+    float | NDArray
         The S/N ratio.
     """
     
     source_photons = get_source_photons(N_source=N_source, gain=gain)
     sky_photons_per_pix = get_sky_photons_per_pixel(n_sky=n_sky, gain=gain)
-    dark_counts_per_pixel = get_dark_counts_per_pixel(dark_curr=dark_curr, t_exp=t_exp)
-    read_counts_per_pixel = get_read_counts_per_pixel(n_read=n_read)
+    read_counts_per_pixel = n_read
     
-    return source_photons / np.sqrt(source_photons + N_pix.value * (1 + N_pix.value / N_bkg.value) * (sky_photons_per_pix + dark_counts_per_pixel + read_counts_per_pixel**2))
+    return source_photons / np.sqrt(source_photons + N_pix * (sky_photons_per_pix + dark_flux + read_counts_per_pixel**2))
 
 def snr_stderr(
-    N_source: Quantity,
-    N_pix: Quantity,
-    N_bkg: Quantity,
-    n_sky: Quantity,
-    dark_curr: Quantity,
-    n_read: Quantity,
-    t_exp: Quantity,
-    gain: Quantity,
-    ) -> float:
+    N_source: float | NDArray,
+    N_pix: float,
+    n_sky: float,
+    dark_flux: float,
+    gain: float,
+    ) -> float | NDArray:
     """
     The standard error (in magnitudes) on the CCD Equation (see Chapter 4.4 of Handbook of CCD Astronomy by Howell, 
     2006).
     
     Parameters
     ----------
-    N_source : Quantity
+    N_source : float | NDArray
         The total number of source counts.
-    N_pix : int
+    N_pix : float
         The number of aperture pixels.
-    N_bkg : Quantity
-        The number of pixels used to estimate the background.
-    n_sky : Quantity
+    n_sky : float
         The number of sky counts **per pixel**.
-    dark_curr : Quantity
-        The number of dark current electrons **per pixel per unit time**. 
-    n_read : Quantity
-        The number of electrons **per pixel** due to read noise.
-    t_exp: Quantity
-        The exposure time.
-    gain: Quantity
+    dark_flux : float
+        The dark current's "flux" contribution per pixel.
+    gain: float
         The detector gain.
     
     Returns
     -------
-    float
+    float | NDArray
         The standard error (in magnitudes) on the S/N ratio.
     """
     
     source_photons = get_source_photons(N_source=N_source, gain=gain)
     sky_photons_per_pix = get_sky_photons_per_pixel(n_sky=n_sky, gain=gain)
-    dark_counts_per_pixel = get_dark_counts_per_pixel(dark_curr=dark_curr, t_exp=t_exp)
-    read_counts_per_pixel = get_read_counts_per_pixel(n_read=n_read)
     
-    p = N_pix.value * (1 + (N_pix.value / N_bkg.value)) * (sky_photons_per_pix + dark_counts_per_pixel + read_counts_per_pixel**2)
+    p = N_pix * (sky_photons_per_pix + dark_flux + n_read**2)
     
     return counts_to_mag_factor * np.sqrt(source_photons + p) / source_photons
 
@@ -324,7 +254,7 @@ def get_noise_params(
     catalog: QTable,
     background: BaseBackground | Callable,
     psf_params: Dict[str, float],
-    ) -> Tuple[NDArray, NDArray, Quantity, Quantity, Quantity, Quantity, Quantity, Quantity, Quantity]:
+    ) -> Tuple[NDArray, NDArray, float, float, float, float]:
     """
     Get the noise values of a science image.
     
@@ -341,56 +271,46 @@ def get_noise_params(
     
     Returns
     -------
-    Tuple[NDArray, NDArray, Quantity, Quantity, Quantity, Quantity, Quantity, Quantity]
-        The fluxes, flux errors, number of pixels, backgorund counts/pixel, dark current, readout noise, exposure time,
-        and gain.
+    Tuple[NDArray, NDArray, float, float, float, float]
+        The fluxes, flux errors, number of aperture pixels, backgorund counts/pixel, dark flux, and gain.
     """
-    
-    n_read = 1.1 * u.adu / u.pix  # Andor Zyla 4.2 PLUS @ 216 MHz
     
     coords = np.asarray([catalog['xcentroid'], catalog['ycentroid']]).T
     
-    img, t_exp, dark_curr, gain = get_image_noise_info(file)
+    img, dark_flux, gain = get_image_noise_info(file)
     
     # global background
     bkg = background(img)
-    
-    # get median background position
-    bkg_values = bkg.background_mesh.flatten()
-    median_index = np.argsort(bkg_values)[bkg_values.size // 2]
-    bkg_pos = np.unravel_index(median_index, bkg.background_mesh.shape)
-    
-    N_bkg = bkg.npixels_mesh[bkg_pos] * u.pix  # number of pixels used to estimate background
-    n_sky = bkg.background_mesh[bkg_pos] * u.adu / u.pix  # background estimate
+    n_sky = float(bkg.background_rms_median**2)  # background variance
     
     # subtract background from image
     img_clean = img - bkg.background
-    img_clean_err = np.sqrt(img_clean + bkg.background_rms**2)
     
     # perform photometry
     phot = AperturePhotometer()
     phot_results = phot.compute(
-        img_clean,
-        img_clean_err,
-        coords,
-        coords,
-        psf_params,
+        image=img_clean,
+        dark_flux=dark_flux,
+        background_rms=np.sqrt(n_sky),
+        source_coords=coords,
+        image_coords=coords,
+        psf_params=psf_params,
         )
     
     # get the number of pixels in the aperture
-    N_pix = phot.get_aperture_area(psf_params=psf_params) * u.pix
+    N_pix = phot.get_aperture_area(psf_params=psf_params)
     
     fluxes = np.array(phot_results['flux'])
     flux_errs = np.array(phot_results['flux_err'])
     
-    return fluxes, flux_errs, N_pix, N_bkg, n_sky, dark_curr, n_read, t_exp, gain
+    return fluxes, flux_errs, N_pix, n_sky, dark_flux, gain
 
 def get_snrs(
     file: str,
     background: BaseBackground | Callable,
     catalog: QTable,
     psf_params: Dict[str, float],
-    ) -> List[float]:
+    ) -> NDArray:
     """
     Get the S/N ratios for the cataloged sources in a science image.
     
@@ -407,30 +327,26 @@ def get_snrs(
     
     Returns
     -------
-    List[float]
+    NDArray
         The S/N for each source. Sources are ordered as they appear in `catalog`.
     """
     
-    fluxes, flux_errs, N_pix, N_bkg, n_sky, dark_curr, n_read, t_exp, gain = get_noise_params(
+    fluxes, flux_errs, N_pix, n_sky, dark_flux, gain = get_noise_params(
         file=file,
         catalog=catalog,
         background=background,
         psf_params=psf_params,
     )
     
-    snrs = [snr(
-        N_source=flux * u.adu,
-        N_pix=N_pix,
-        N_bkg=N_bkg,
-        n_sky=n_sky,
-        dark_curr=dark_curr,
-        n_read=n_read,
-        t_exp=t_exp,
-        gain=gain,
-        ) for flux in fluxes]
-        
-    
-    return snrs
+    return np.asarray(
+        snr(
+            N_source=fluxes,
+            N_pix=N_pix,
+            n_sky=n_sky,
+            dark_flux=dark_flux,
+            gain=gain,
+            )
+        )
 
 def characterise_noise(
     file: str,
@@ -459,7 +375,7 @@ def characterise_noise(
         The noies properties.
     """
     
-    fluxes, flux_errs, N_pix, N_bkg, n_sky, dark_curr, n_read, t_exp, gain = get_noise_params(
+    fluxes, flux_errs, N_pix, n_sky, dark_flux, gain = get_noise_params(
         file=file,
         catalog=catalog,
         background=background,
@@ -470,25 +386,22 @@ def characterise_noise(
         np.log10(np.min(fluxes) / 1.5),
         np.log10(np.max(fluxes) * 1.5),
         100,
-        ) * u.adu
+        )
     
     results = {}
     
-    results['model_mags'] = -2.5 * np.log10(N_source.value)
-    results['effective_noise'] = snr_stderr(N_source, N_pix, N_bkg, n_sky, dark_curr, n_read, t_exp, gain)
+    results['model_mags'] = -2.5 * np.log10(N_source)
+    results['effective_noise'] = snr_stderr(N_source, N_pix, n_sky, dark_flux, gain)
     results['sky_noise'] = get_sky_stderr(N_source, N_pix, n_sky, gain)
     results['shot_noise'] = get_shot_stderr(N_source, gain)
-    results['dark_noise'] = get_dark_stderr(N_source, N_pix, dark_curr, t_exp, gain)
-    results['read_noise'] = get_read_stderr(N_source, N_pix, n_read, gain)
+    results['dark_noise'] = get_dark_stderr(N_source, N_pix, dark_flux, gain)
+    results['read_noise'] = get_read_stderr(N_source, N_pix, gain)
     
     results['measured_mags'] = -2.5 * np.log10(fluxes)
     results['measured_noise'] = counts_to_mag_factor * flux_errs / fluxes,
-    results['expected_measured_noise'] = snr_stderr(fluxes * u.adu, N_pix, N_bkg, n_sky, dark_curr, n_read, t_exp, gain)
+    results['expected_measured_noise'] = snr_stderr(fluxes, N_pix, n_sky, dark_flux, gain)
     
     return results
-
-
-
 
 
 

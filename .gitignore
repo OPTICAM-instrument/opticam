@@ -1,3 +1,9 @@
-
-*.pyc
-*.ipynb_checkpoints
+**/__pycache__/
+build/
+opticam.egg-info/
+docs/tutorials/background_tutorial
+docs/tutorials/corrections_tutorial
+docs/tutorials/finders_tutorial
+docs/tutorials/local_backgrounds_tutorial
+docs/tutorials/reduction_tutorial
+docs/tutorials/timing_analysis_tutorial

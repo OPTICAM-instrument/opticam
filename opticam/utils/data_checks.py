@@ -26,7 +26,7 @@ def check_data(
     return_output: bool = False,
     logger: Logger | None = None,
     number_of_processors = cpu_count() // 2,
-    ) -> None | Tuple[Dict[str, List[str]], int, Dict[str, float], List[str], Dict[str, float], float]:
+    ) -> None | Tuple[Dict[str, List[str]], int, Dict[str, float], List[str], Dict[str, float], Dict[str, float], float]:
     """
     Check that the data are self-consistent.
     
@@ -86,7 +86,7 @@ def check_data(
         tqdm_class=tqdm)
     
     # unpack results
-    binning_scale, bmjds, filters, gains, ignored_files = parse_header_results(
+    binning_scale, bmjds, filters, gains, darkcurrs, ignored_files = parse_header_results(
         results=results,
         file_paths=file_paths,
         out_directory=out_directory,
@@ -120,7 +120,7 @@ def check_data(
         output(func=print)
     
     if return_output:
-        return camera_files, binning_scale, bmjds, ignored_files, gains, t_ref
+        return camera_files, binning_scale, bmjds, ignored_files, gains, darkcurrs, t_ref
 
 
 def parse_header_results(
@@ -128,7 +128,7 @@ def parse_header_results(
     file_paths: List[str],
     out_directory: str,
     logger: Logger | None,
-    ) -> Tuple[int, Dict[str, float], Dict[str, str], Dict[str, float], List[str]]:
+    ) -> Tuple[int, Dict[str, float], Dict[str, str], Dict[str, float], Dict[str, float], List[str]]:
     """
     Parse the header info results.
     
@@ -145,8 +145,8 @@ def parse_header_results(
     
     Returns
     -------
-    Tuple[int, Dict[str, float], Dict[str, str], Dict[str, float], List[str]]
-        The binning scale, BMJD dates, filters, gains, and ignored files.
+    Tuple[int, Dict[str, float], Dict[str, str], Dict[str, float], Dict[str, float], List[str]]
+        The binning scale, BMJD dates, filters, gains, dark currents, and ignored files.
     
     Raises
     ------
@@ -160,10 +160,11 @@ def parse_header_results(
     filters = {}
     binnings = {}
     gains = {}
+    darkcurrs = {}
     ignored_files = []
     
     # unpack results
-    raw_bmjds, raw_filters, raw_binnings, raw_gains = zip(*results)
+    raw_bmjds, raw_filters, raw_binnings, raw_gains, raw_darkcurrs = zip(*results)
     
     # consolidate results
     for i in range(len(raw_bmjds)):
@@ -172,6 +173,7 @@ def parse_header_results(
             filters.update({file_paths[i]: raw_filters[i]})
             binnings.update({file_paths[i]: raw_binnings[i]})
             gains.update({file_paths[i]: raw_gains[i]})
+            darkcurrs.update({file_paths[i]: raw_darkcurrs[i]})
         else:
             ignored_files.append(file_paths[i])
     
@@ -206,7 +208,7 @@ def parse_header_results(
                 if logger:
                     logger.warning(string)
     
-    return binning_scale, bmjds, filters, gains, ignored_files
+    return binning_scale, bmjds, filters, gains, darkcurrs, ignored_files
 
 
 def data_checks_output(
