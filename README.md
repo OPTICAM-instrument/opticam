@@ -10,7 +10,24 @@ A Python package for reducing OPTICAM data.
 
 ## Installation
 
-### From GitHub (recommended)
+### Option 1: Docker (Recommended for Easy Setup)
+
+The easiest way to get started with Opticam is using Docker, which provides a complete environment with Jupyter Lab:
+
+```bash
+# Copy the environment configuration
+cp .env.example .env
+
+# Start Jupyter Lab
+chmod +x start.sh
+./start.sh
+```
+
+Then access Jupyter Lab at `http://localhost:8888`
+
+For detailed Docker documentation, see [DOCKER.md](DOCKER.md).
+
+### Option 2: From GitHub
 
 You can install the latest stable release of `opticam` directly from GitHub using:
 

@@ -1,0 +1,65 @@
+# Git
+.git
+.gitignore
+.gitattributes
+.github
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Jupyter
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+
+# IDEs
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+venv/
+env/
+ENV/
+
+# Documentation build
+docs/_build/
+site/
+
+# Tests
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Project-specific
+data/
+notebooks/
+output/
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+start.sh
+diagnose.sh
+DOCKER.md
+
+# CI/CD
+.github/
+
+# Documentation source (we copy this in Dockerfile explicitly)
+# But exclude build artifacts
+docs/_build/
