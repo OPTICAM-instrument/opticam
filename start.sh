@@ -89,7 +89,7 @@ echo "Building Docker image..."
 echo "This may take several minutes on first run..."
 echo ""
 
-docker-compose build
+docker compose build
 
 echo ""
 echo "================================================"
@@ -112,4 +112,4 @@ echo ""
 echo "================================================"
 echo ""
 
-docker-compose up
+docker compose up
