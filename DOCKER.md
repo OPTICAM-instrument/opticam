@@ -155,13 +155,11 @@ In Jupyter, access them at `/workspace/data/`.
 3. Import opticam:
 
 ```python
-import opticam
-from opticam.reducer import Reducer
-from pathlib import Path
+from opticam import opticam
 
 # Your data is at /workspace/data/
-data_path = Path("/workspace/data")
-output_path = Path("/workspace/output")
+data_path = "/workspace/data"
+output_path = "/workspace/output"
 
 # Start your reduction
 # ... (follow tutorial examples)
@@ -293,6 +291,21 @@ This checks:
    - `http://localhost:8888`
    - `http://localhost:8888/lab`
    - `http://127.0.0.1:8888`
+
+### Issue: "AttributeError: module 'opticam' has no attribute '[attribute]'"
+
+**Symptoms**: AttributeError when trying to instance `opticam` classes or call `opticam` functions.
+
+**Solution**:
+
+The Docker installation of `opticam` contains a containerized copy of the `opticam` package in a directory called "opticam". To import the `opticam` package, users must therefore replace
+```python
+import opticam
+```
+with
+```python
+from opticam import opticam
+```
 
 ### Issue: "Module Not Found" Errors
 
