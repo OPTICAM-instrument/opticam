@@ -1,0 +1,20 @@
+services:
+  jupyter:
+    build: .
+    container_name: ${CONTAINER_NAME:-opticam-jupyter}
+    ports:
+      - "${JUPYTER_PORT:-8888}:8888"
+    volumes:
+      # Mount data directory for input FITS files
+      - ${DATA_DIR:-./data}:/workspace/data
+      # Mount notebooks directory
+      - ${NOTEBOOKS_DIR:-./notebooks}:/workspace/notebooks
+      # Mount output directory for results
+      - ${OUTPUT_DIR:-./output}:/workspace/output
+      # Mount tutorials (read-only)
+      - ./docs/tutorials:/workspace/tutorials:ro
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+      - JUPYTER_TOKEN=${JUPYTER_TOKEN:-}
+      - JUPYTER_PASSWORD=${JUPYTER_PASSWORD:-}
+    restart: unless-stopped
