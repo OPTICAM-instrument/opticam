@@ -981,7 +981,7 @@ def plot_noise(
         axes[1][i].scatter(
             results['measured_mags'],
             results['measured_noise'] / results['expected_measured_noise'],
-        )
+            )
         axes[1][i].fill_between(
             axes[1][i].set_xlim(),
             [1.05, 1.05],
@@ -990,6 +990,34 @@ def plot_noise(
             edgecolor='none',
             alpha=.5,
             )
+        
+        for j in range(len(results['measured_mags'])):
+            axes[0][i].text(
+                results['measured_mags'][j],
+                results['measured_noise'][j] * 1.1,
+                f'{j + 1}',
+                ha='center',
+                va='bottom',
+                )
+            
+            r = results['measured_noise'][j] / results['expected_measured_noise'][j]
+            
+            if r >= 1:
+                axes[1][i].text(
+                results['measured_mags'][j],
+                r * 1.01,
+                f'{j + 1}',
+                ha='center',
+                va='bottom',
+                )
+            else:
+                axes[1][i].text(
+                results['measured_mags'][j],
+                r * .99,
+                f'{j + 1}',
+                ha='center',
+                va='top',
+                )
         
         axes[0][i].set_yscale('log')
         axes[0][i].set_title(fltr, fontsize='large')

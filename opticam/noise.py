@@ -398,7 +398,7 @@ def characterise_noise(
     results['read_noise'] = get_read_stderr(N_source, N_pix, gain)
     
     results['measured_mags'] = -2.5 * np.log10(fluxes)
-    results['measured_noise'] = counts_to_mag_factor * flux_errs / fluxes,
+    results['measured_noise'] = counts_to_mag_factor * flux_errs / fluxes
     results['expected_measured_noise'] = snr_stderr(fluxes, N_pix, n_sky, dark_flux, gain)
     
     return results

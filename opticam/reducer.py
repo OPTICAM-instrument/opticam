@@ -514,11 +514,11 @@ class Reducer:
             with open(os.path.join(self.out_directory, "cat/transforms.json"), "w") as file:
                 json.dump(self.transforms, file, indent=4)
         
-        # write unaligned files to file
-        if len(self.unaligned_files) > 0 and (not os.path.isfile(os.path.join(self.out_directory, "diag/unaligned_files.txt")) or overwrite):
-            with open(os.path.join(self.out_directory, "diag/unaligned_files.txt"), "w") as unaligned_file:
-                for file in self.unaligned_files:
-                    unaligned_file.write(file + "\n")
+        # save unaligned files to file
+        save_unaligned_files(
+            out_directory=self.out_directory,
+            unaligned_files=self.unaligned_files,
+            )
 
     def plot_background_meshes(
         self,
@@ -905,6 +905,40 @@ class Reducer:
             show=self.show_plots,
             )
 
+    def update_unaligned_files(
+        self,
+        files: str | List[str],
+        ) -> None:
+        """
+        Add one or more files to the list of unaligned files. Unaligned files are skipped when performing photometry.
+        
+        Parameters
+        ----------
+        files : str | List[str]
+            The file or files.
+        """
+        
+        if isinstance(files, str):
+            files = [files]
+        
+        for file in files:
+            if os.path.isfile(file):
+                self.unaligned_files.append(file)
+            elif os.path.isfile(os.path.join(str(self.data_directory), file)):
+                self.unaligned_files.append(os.path.join(str(self.data_directory), file))
+            elif os.path.isfile(os.path.join(str(self.c1_directory), file)):
+                self.unaligned_files.append(os.path.join(str(self.c1_directory), file))
+            elif os.path.isfile(os.path.join(str(self.c2_directory), file)):
+                self.unaligned_files.append(os.path.join(str(self.c2_directory), file))
+            elif os.path.isfile(os.path.join(str(self.c3_directory), file)):
+                self.unaligned_files.append(os.path.join(str(self.c3_directory), file))
+            else:
+                raise ValueError(f'[OPTICAM] file {file} could not be found.')
+        
+        save_unaligned_files(
+            out_directory=self.out_directory,
+            unaligned_files=self.unaligned_files,
+        )
 
 
 
@@ -1114,6 +1148,27 @@ def save_background(
     merged_df = merged_df.reindex(columns=['BMJD', 'median', 'rms'])  # reorder columns
     
     merged_df.to_csv(os.path.join(out_directory, f'diag/{fltr}_background.csv'), index=False)
+
+
+def save_unaligned_files(
+    out_directory: str,
+    unaligned_files: List[str],
+    ) -> None:
+    """
+    Save the unaligned files to a text file.
+    
+    Parameters
+    ----------
+    out_directory : str
+        The output directory.
+    unaligned_files : List[str]
+        The list of unaligned files.
+    """
+    
+    if len(unaligned_files) > 0:
+        with open(os.path.join(out_directory, "diag/unaligned_files.txt"), "w") as unaligned_file:
+            for file in unaligned_files:
+                unaligned_file.write(file + "\n")
 
 
 def get_random_image_for_each_filter(
