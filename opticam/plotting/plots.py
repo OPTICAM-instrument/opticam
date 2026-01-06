@@ -94,6 +94,7 @@ def plot_catalogs(
                 catalogs[fltr]["ycentroid"][j] + 1.05 * radius,
                 j + 1,  # source number
                 color=catalog_colors[j % len(catalog_colors)],
+                fontsize='large',
                 )
             
             # label plot
@@ -632,10 +633,12 @@ def plot_rms_vs_median_flux(
         nrows=2,
         ncols=len(pl_fits),
         tight_layout=True,
-        figsize=(5 * len(pl_fits), 5),
+        figsize=(12.8, 4.8),
         sharex='col',
+        sharey='row',
         gridspec_kw={
             'hspace': 0,
+            'wspace': 0,
             'height_ratios': [4, 1],
             },
         )
@@ -648,6 +651,15 @@ def plot_rms_vs_median_flux(
             else:
                 ax1 = axes[0][0]
                 ax2 = axes[1][0]
+            
+            ax1.set_ylabel(
+                'Flux RMS [counts]',
+                fontsize='large',
+                )
+            ax2.set_ylabel(
+                '$\\frac{\\rm RMS}{\\rm model}$',
+                fontsize='xx-large',
+                )
         elif fltr in ['r-band']:
             if len(pl_fits) == 1:
                 ax1 = axes[0]
@@ -707,6 +719,7 @@ def plot_rms_vs_median_flux(
                 values['rms'] * 1.03,
                 str(source_number),
                 color=color,
+                fontsize='large',
                 )
             
             ax2.scatter(
@@ -724,10 +737,6 @@ def plot_rms_vs_median_flux(
                 )
         
         ax1.set_yscale('log')
-        ax1.set_ylabel(
-            'Flux RMS [counts]',
-            fontsize='large',
-            )
         
         ax2.plot(
             pl_fits[fltr]['flux'],
@@ -750,17 +759,13 @@ def plot_rms_vs_median_flux(
             'Median flux [counts]',
             fontsize='large',
             )
-        ax2.set_ylabel(
-            'RMS / model',
-            fontsize='large',
-            )
     
     for ax in axes.flatten():
         ax.set_xscale('log')
         ax.minorticks_on()
         ax.tick_params(which='both', direction='in', top=True, right=True)
     
-    fig.savefig(os.path.join(save_dir, f'{phot_label}_rms_vs_median.pdf'))
+    fig.savefig(os.path.join(save_dir, f'{phot_label}_rms_vs_median.pdf'), bbox_inches='tight')
     
     if show:
         plt.show(fig)
@@ -945,11 +950,13 @@ def plot_noise(
         nrows=2,
         tight_layout=True,
         sharex='col',
+        sharey='row',
         gridspec_kw={
             'hspace': 0,
+            'wspace': 0,
             'height_ratios': [4, 1],
             },
-        figsize=(15, 5),
+        figsize=(12.8, 4.8),
         )
     
     for i, (fltr, file) in enumerate(files.items()):
@@ -994,10 +1001,11 @@ def plot_noise(
         for j in range(len(results['measured_mags'])):
             axes[0][i].text(
                 results['measured_mags'][j],
-                results['measured_noise'][j] * 1.1,
+                results['measured_noise'][j] * 1.2,
                 f'{j + 1}',
                 ha='center',
                 va='bottom',
+                fontsize='large',
                 )
             
             r = results['measured_noise'][j] / results['expected_measured_noise'][j]
@@ -1009,6 +1017,7 @@ def plot_noise(
                 f'{j + 1}',
                 ha='center',
                 va='bottom',
+                fontsize='large',
                 )
             else:
                 axes[1][i].text(
@@ -1017,6 +1026,7 @@ def plot_noise(
                 f'{j + 1}',
                 ha='center',
                 va='top',
+                fontsize='large',
                 )
         
         axes[0][i].set_yscale('log')
@@ -1040,6 +1050,7 @@ def plot_noise(
         loc='lower center',
         ncol=6,
         bbox_transform=fig.transFigure,
+        fontsize='large',
         )
     
     if save:
