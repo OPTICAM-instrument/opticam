@@ -44,16 +44,15 @@ def plot_catalogs(
         Whether to save the plot.
     """
     
+    ncols: int = len(stacked_images)
+    
     fig, axes = plt.subplots(
-        ncols=len(stacked_images),
+        ncols=ncols,
         tight_layout=True,
-        figsize=(
-            len(stacked_images) * 5,
-            5,
-            ),
+        figsize=(ncols * 5, 5),
         )
     
-    if len(stacked_images) == 1:
+    if ncols == 1:
         axes = [axes]
     
     for i, fltr in enumerate(stacked_images):
@@ -627,13 +626,14 @@ def plot_rms_vs_median_flux(
         )
     pl_fits = fit_rms_vs_flux(data)
     
-    assert len(pl_fits) >= 1, f"[OPTICAM] No valid light curve files found in {lc_dir}."
+    ncols: int = len(pl_fits)
+    assert ncols >= 1, f"[OPTICAM] No valid light curve files found in {lc_dir}."
     
     fig, axes = plt.subplots(
         nrows=2,
-        ncols=len(pl_fits),
+        ncols=ncols,
         tight_layout=True,
-        figsize=(12.8, 4.8),
+        figsize=(2 / 3 * ncols * 6.4, 4.8),
         sharex='col',
         sharey='row',
         gridspec_kw={
@@ -645,7 +645,7 @@ def plot_rms_vs_median_flux(
     
     for fltr in data.keys():
         if fltr in ['u-band', 'g-band']:
-            if len(pl_fits) == 1:
+            if ncols == 1:
                 ax1 = axes[0]
                 ax2 = axes[1]
             else:
@@ -661,14 +661,14 @@ def plot_rms_vs_median_flux(
                 fontsize='xx-large',
                 )
         elif fltr in ['r-band']:
-            if len(pl_fits) == 1:
+            if ncols == 1:
                 ax1 = axes[0]
                 ax2 = axes[1]
             else:
                 ax1 = axes[0][1]
                 ax2 = axes[1][1]
         elif fltr in ['i-band', 'z-band']:
-            if len(pl_fits) == 1:
+            if ncols == 1:
                 ax1 = axes[0]
                 ax2 = axes[1]
             else:
@@ -850,10 +850,12 @@ def plot_snrs(
         Whether to save the plot.
     """
     
+    ncols: int = len(files)
+    
     fig, axes = plt.subplots(
-        ncols=3,
+        ncols=ncols,
         tight_layout=True,
-        figsize=(15, 5),
+        figsize=(2 / 3 * ncols * 6.4, 5),
         )
     
     for i, (fltr, file) in enumerate(files.items()):
@@ -945,8 +947,10 @@ def plot_noise(
         Whether to save the plot.
     """
     
+    ncols: int = len(files)
+    
     fig, axes = plt.subplots(
-        ncols=3,
+        ncols=ncols,
         nrows=2,
         tight_layout=True,
         sharex='col',
@@ -956,7 +960,7 @@ def plot_noise(
             'wspace': 0,
             'height_ratios': [4, 1],
             },
-        figsize=(12.8, 4.8),
+        figsize=(2 / 3 * ncols * 6.4, 5),
         )
     
     for i, (fltr, file) in enumerate(files.items()):
@@ -1172,7 +1176,7 @@ def plot_apertures(
         
         # get region of interest
         region = data[bbox.iymin:bbox.iymax, bbox.ixmin:bbox.ixmax]
-        centre = [position[0] - bbox.ixmin, position[1] - bbox.iymin]  # centre of region
+        centre = (position[0] - bbox.ixmin, position[1] - bbox.iymin)  # centre of region
         
         axes[i].imshow(region, origin='lower', cmap='Greys', norm=simple_norm(region, stretch='log'))
         
@@ -1208,7 +1212,7 @@ def plot_apertures(
                                     ls='--',
                                     )
             axes[i].add_patch(inner_ellipse)
-
+            
             outer_ellipse = Ellipse(centre,
                                     width=annulus_outer_width,
                                     height=annulus_outer_height,
