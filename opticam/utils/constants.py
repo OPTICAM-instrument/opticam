@@ -45,9 +45,6 @@ catalog_colors = [
     'tab:green',
     'tab:red',
     'tab:brown',
-    'tab:pink',
-    'tab:olive',
-    'tab:cyan',
     ]
 
 n_read = 1.1  # [electrons/pixel] Andor Zyla 4.2 PLUS read noise @ 216 MHz
