@@ -6,6 +6,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from opticam.utils.helpers import create_file_paths
+from opticam.utils.image_helpers import rebin_image
 from opticam.utils.logging import log_binnings, log_filters
 
 class FlatFieldCorrector:
@@ -20,6 +21,7 @@ class FlatFieldCorrector:
         c1_flats_directory: str | None = None,
         c2_flats_directory: str | None = None,
         c3_flats_directory: str | None = None,
+        rebin_factor: int = 1,
         ) -> None:
         """
         Helper class for performing flat-field corrections on OPTICAM images.
@@ -43,9 +45,16 @@ class FlatFieldCorrector:
         c3_flats_dir : str, optional
             The directory path to the flat-field images for C3 only, by default None. If flats_dir is also defined, this
             parameter will be ignored.
+        rebin_factor : int, optional
+            The rebinning factor, by default 1 (no rebinning). The rebinning factor is the factor by which the image is
+            rebinned in both dimensions. In the case of flat-field images, rebinning may be required if the flats were
+            taken in a lower binning mode than the observations being reduced.
         """
         
         self.out_directory = out_directory
+        
+        assert isinstance(rebin_factor, int), "[OPTICAM] Non-integer rebin factors are not supported!"
+        self.rebin_factor = rebin_factor
         
         if not os.path.exists(out_directory):
             try:
@@ -100,6 +109,10 @@ class FlatFieldCorrector:
             for flat_path in self.flat_paths[fltr]:
                 with fits.open(flat_path) as hdul:
                     flat = np.array(hdul[0].data, dtype=np.float64)
+                
+                if self.rebin_factor > 1:
+                    flat = rebin_image(flat, self.rebin_factor)
+                
                 flats.append(flat / np.median(flat))  # add normalised flat-field image to list
             
             # create master flat
