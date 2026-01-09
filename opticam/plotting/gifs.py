@@ -142,6 +142,5 @@ def compile_gif(
     
     if not keep_frames:
         # delete frames after gif is saved
-        for file in tqdm(os.listdir(os.path.join(out_directory, f"diag/{fltr}_gif_frames")), disable=not verbose,
-                            desc=f"[OPTICAM] Deleting {fltr} GIF frames"):
+        for file in os.listdir(os.path.join(out_directory, f"diag/{fltr}_gif_frames")):
             os.remove(os.path.join(out_directory, f"diag/{fltr}_gif_frames/{file}"))
