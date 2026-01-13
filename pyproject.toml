@@ -4,11 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "opticam"
-version = "0.5.2"
+version = "0.6.0"
 description = "A Python package for reducing OPTICAM data."
 readme = "README.md"
 authors = [
     {name = "Zackery A. Irving", email = "zackery.irving@icloud.com"},
+    {name = "Noel Castro Segura", email = "noel.castro.segura@gmail.com"},
 ]
 
 requires-python = ">=3.12.7"
