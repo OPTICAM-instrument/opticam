@@ -11,8 +11,8 @@ from pathlib import Path
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 project = 'opticam'
-copyright = '2025, Zackery A. Irving'
-author = 'Zackery A. Irving'
+copyright = '2026, OPTICAM-instrument developers'
+author = 'Zackery A. Irving, Noel Castro Segura'
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
