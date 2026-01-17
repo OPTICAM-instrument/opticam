@@ -8,6 +8,7 @@ A Python package for reducing OPTICAM data.
    :caption: Contents:
 
    tutorials/reduction
+   tutorials/instruments
    tutorials/applying_corrections
    tutorials/backgrounds
    tutorials/local_backgrounds
