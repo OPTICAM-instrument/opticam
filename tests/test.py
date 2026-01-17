@@ -1,13 +1,19 @@
-import unittest
-import numpy as np
 import os
 import tempfile
+import unittest
+
+import numpy as np
 from astropy.io import fits
+
 
 from opticam.background.global_background import DefaultBackground
 from opticam.background.local_background import DefaultLocalBackground
 from opticam.finders import DefaultFinder
 from opticam.utils.generate import generate_observations
+
+# TODO: add unit tests for instruments and correctors
+
+
 
 
 class TestBackground(unittest.TestCase):
