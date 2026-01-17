@@ -1,11 +1,17 @@
 import os
+from pathlib import Path
 from typing import Any, Dict, List
 import re
 
+
+from astropy.timeseries import TimeSeries
 import numpy as np
 from numpy.typing import NDArray
 
-from opticam.utils.constants import n_read
+
+from opticam.utils.constants import filter_order
+
+
 
 
 def camel_to_snake(
@@ -28,11 +34,12 @@ def camel_to_snake(
     return re.sub(r'(?<!^)(?=[A-Z])', '_', string).lower()
 
 
-def sort_filters(
+def sort_dict_by_filters(
     d: Dict[str, Any],
     ) -> Dict[str, Any]:
     """
-    Sort a dictionary whose keys are filter names in the order of the camera filters (e.g., u/g, r, i/z).
+    Attempt to sort a dictionary whose keys are filter names in order of increasing wavelength (e.g., u, g, r, i, z). If
+    unrecognised filters are passed, no sorting is performed.
     
     Parameters
     ----------
@@ -45,56 +52,62 @@ def sort_filters(
         The sorted dictionary.
     """
     
-    key_order = {
-        'u-band': 0,
-        "u'-band": 0,
-        'g-band': 0,
-        "g'-band": 0,
-        "r-band": 1,
-        "r'-band": 1,
-        'i-band': 2,
-        "i'-band": 2,
-        'z-band': 2,
-        "z'-band": 2,
-        }
+    for key in d.keys():
+        if key not in filter_order.keys():
+            # unrecognised filter; cannot sort
+            return d
     
-    return dict(sorted(d.items(), key=lambda x: key_order[x[0]]))
+    return dict(sorted(d.items(), key=lambda x: filter_order[x[0]]))
+
+
+def sort_filters(
+    filters: List[str],
+    ) -> List[str]:
+    """
+    Attempt to sort a list of filters in order of increasing wavelength (e.g., u, g, r, i, z). If unrecognised filters
+    are passed, no sorting is performed.
+    
+    Parameters
+    ----------
+    filters : List[str]
+        The list of filters.
+    
+    Returns
+    -------
+    List[str]
+        The sorted list of filters.
+    """
+    
+    for fltr in filters:
+        if fltr not in filter_order.keys():
+            # unrecognised filter; cannot sort
+            return filters
+    
+    return sorted(filters, key=lambda x: filter_order[x[0]])
 
 
 def create_file_paths(
-    data_directory: None | str = None,
-    c1_directory: None | str = None,
-    c2_directory: None | str = None,
-    c3_directory: None | str = None,
-    ) -> List[str]:
+    data_directory: Path,
+    ) -> List[Path]:
     """
     Given some directories, get the paths to all available FITS files.
     
     Parameters
     ----------
-    data_directory : None | str, optional
-        The directory containing the FITS files of all three cameras, by default None.
-    c1_directory : None | str, optional
-        The directory containing the FITS files of Camera 1, by default None.
-    c2_directory : None | str, optional
-        The directory containing the FITS files of Camera 2, by default None.
-    c3_directory : None | str, optional
-        The directory containing the FITS files of Camera 3, by default None.
+    data_directory : Path
+        The directory containing the FITS files.
     
     Returns
     -------
-    List[str]
+    List[Path]
         The file paths.
     """
     
     file_paths = []
-    
-    for directory in [data_directory, c1_directory, c2_directory, c3_directory]:
-        if directory is not None:
-            file_names = os.listdir(directory)
-            for file_name in file_names:
-                if '.fit' in file_name:
-                    file_paths.append(os.path.join(directory, file_name))
+    file_names = os.listdir(data_directory)
+    for file_name in file_names:
+        if '.fit' in file_name:
+            file_paths.append(os.path.join(data_directory, file_name))
     
     return file_paths
 
@@ -103,7 +116,8 @@ def propagate_errors(
     data: NDArray,
     dark_flux: float,
     background_rms: float | NDArray,
-    ) -> NDArray:
+    read_noise: float,
+    ) -> NDArray[np.float64]:
     """
     Propagate the shot noise, dark noise, sky noise, and read noise error contributions.
     
@@ -115,21 +129,62 @@ def propagate_errors(
         The dark current's flux contribution.
     background_rms : float | NDArray
         The background RMS.
+    read_noise : float
+        The read noise [electrons/pixel].
     
     Returns
     -------
-    NDArray
+    NDArray[np.float64]
         The error.
     """
     
     shot_noise_variance = np.clip(data, 0., None)  # clip negative values
     
-    total_variance = shot_noise_variance + background_rms**2 + n_read**2 + dark_flux
+    total_variance = shot_noise_variance + background_rms**2 + read_noise**2 + dark_flux
     
     return np.sqrt(total_variance)
 
 
-
+def get_lc(
+    light_curves: TimeSeries,
+    fltr: str,
+    ) -> TimeSeries:
+    """
+    Given a table of light curves, extract the light curve for a single filter.
+    
+    Parameters
+    ----------
+    light_curves : TimeSeries
+        The table of light curves.
+    fltr : str
+        The filter.
+    
+    Returns
+    -------
+    TimeSeries
+        The light curve for the filter.
+    """
+    
+    colnames = light_curves.colnames
+    new_colnames = []
+    
+    for colname in colnames:
+        # get filter fluxes
+        if 'rel_flux' in colname:
+            if f'{fltr}_rel_flux' in colname:
+                new_colnames.append(colname)
+        # get filter backgrounds if included
+        elif 'bkg' in colname:
+            if f'{fltr}_bkg' in colname:
+                new_colnames.append(colname)
+        # include all non-flux/non-background columns (time, time_bin_start, etc.)
+        else:
+            new_colnames.append(colname)
+    
+    lc = light_curves[*new_colnames]
+    lc.remove_rows(np.where(np.isnan(lc[f'{fltr}_rel_flux']).mask)[0])
+    
+    return lc
 
 
 

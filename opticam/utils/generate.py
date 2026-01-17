@@ -1,30 +1,37 @@
+from pathlib import Path
+from typing import Dict, List, Tuple
+
+
 from astropy.io import fits
-import os
-from tqdm import tqdm
 import numpy as np
 from numpy.typing import NDArray
-from typing import Tuple
+from tqdm import tqdm
+
 
 from opticam.utils.constants import bar_format
 
 
-FILTERS = ["g", "r", "i"]
-N_SOURCES = 6
 
-RMS = 0.02  # fractional RMS of variability
-FREQ = 0.135  # frequency of variability
+
+FILTERS: List[str] = ["g", "r", "i"]
+N_SOURCES: int = 6
+
+RMS: float = 0.02  # fractional RMS of variability
+FREQ: float = 0.135  # frequency of variability
 
 # variability phase lags
-PHASE_LAGS = {
+PHASE_LAGS: Dict[str, float] = {
     'g': 0,
     'r': np.pi / 2,
     'i': np.pi,
 }
 
-MEDIAN_BKG = 100
-MEDIAN_BKG_RMS = np.sqrt(MEDIAN_BKG)
-MEDIAN_FLAT_FLUX = 10000
-MEDIAN_FLAT_FLUX_RMS = np.sqrt(10000)
+MEDIAN_BKG: float = 100.0
+MEDIAN_BKG_RMS: float = np.sqrt(MEDIAN_BKG)
+MEDIAN_FLAT_FLUX: float = 10000.0
+MEDIAN_FLAT_FLUX_RMS: float = np.sqrt(MEDIAN_FLAT_FLUX)
+
+
 
 
 def two_dimensional_gaussian(
@@ -76,6 +83,7 @@ def two_dimensional_gaussian(
     
     return amp * np.exp(-.5 * (np.square(x_rot / a) + np.square(y_rot / b)))
 
+
 def variable_function(
     i: float,
     fltr: str,
@@ -100,6 +108,7 @@ def variable_function(
     
     return 1 + amp * np.sin(2 * np.pi * i * FREQ + PHASE_LAGS[fltr])
 
+
 def create_image(
     binning_scale: int,
     ) -> NDArray:
@@ -114,10 +123,11 @@ def create_image(
     Returns
     -------
     NDArray
-        The noisy image.
+        The blank image.
     """
     
     return np.zeros((2048 // binning_scale, 2048 // binning_scale))
+
 
 def poisson_noise(
     image: NDArray,
@@ -142,6 +152,7 @@ def poisson_noise(
     rng = np.random.default_rng(i)
     
     return rng.normal(0, np.sqrt(image))
+
 
 def noisy_background(
     image: NDArray,
@@ -173,8 +184,9 @@ def noisy_background(
     
     return rng.normal(median, rms, size=image.shape)
 
+
 def create_images(
-    out_dir: str,
+    out_directory: Path,
     variable_source: int,
     source_positions: NDArray,
     fluxes: NDArray,
@@ -188,10 +200,8 @@ def create_images(
     
     Parameters
     ----------
-    filters : List[str]
-        The filters.
-    N_sources : int
-        The number of sources.
+    out_directory : Path
+        The directory path to the output.
     variable_source : int
         The index of the variable source.
     source_positions : NDArray
@@ -209,7 +219,8 @@ def create_images(
     """
     
     for fltr in FILTERS:
-        if os.path.isfile(f"{out_dir}/240101{fltr}{200000000 + i}o.fits.gz") and not overwrite:
+        save_path = out_directory.joinpath(f'240101{fltr}{200000000 + i}o.fits.gz')
+        if save_path.is_file() and not overwrite:
             continue
         
         # generate blank image
@@ -275,10 +286,8 @@ def create_images(
         hdu.header["UT"] = f"2024-01-01 {hh}:{mm}:{ss}"
         
         # save fits file
-        hdu.writeto(
-            f"{out_dir}/240101{fltr}{200000000 + i}o.fits.gz",
-            overwrite=overwrite,
-            )
+        hdu.writeto(save_path, overwrite=overwrite)
+
 
 def apply_flat_field(
     image: NDArray,
@@ -312,8 +321,9 @@ def apply_flat_field(
     
     return image
 
+
 def create_flats(
-    out_dir: str,
+    out_directory: Path,
     filters: list,
     i: int,
     binning_scale: int,
@@ -324,7 +334,7 @@ def create_flats(
     
     Parameters
     ----------
-    out_dir : str
+    out_directory : Path
         The directory to save the flat-field images.
     filters : list
         The filters to create flat-field images for.
@@ -338,7 +348,8 @@ def create_flats(
     
     for fltr in filters:
         
-        if os.path.isfile(f"{out_dir}/{fltr}-band_image_{i}.fits.gz") and not overwrite:
+        save_path = out_directory.joinpath(f'{fltr}-band_image_{i}.fits.gz')
+        if save_path.is_file() and not overwrite:
             continue
         
         image = create_image(binning_scale)
@@ -363,10 +374,11 @@ def create_flats(
         hdu.header["UT"] = f"2024-01-01 {hh}:{mm}:{ss}"
         
         # save fits file
-        hdu.writeto(f"{out_dir}/{fltr}-band_flat_{i}.fits.gz", overwrite=overwrite)
+        hdu.writeto(save_path, overwrite=overwrite)
+
 
 def generate_flats(
-    out_dir: str,
+    out_directory: Path | str,
     n_flats: int = 5,
     binning_scale: int = 4,
     overwrite: bool = False,
@@ -376,7 +388,7 @@ def generate_flats(
     
     Parameters
     ----------
-    out_dir : str
+    out_directory : Path | str
         The directory to save the data.
     n_flats : int, optional
         The number of flats per camera, by default 5.
@@ -386,23 +398,26 @@ def generate_flats(
         Whether to overwrite data if they currently exist, by default False.
     """
     
+    out_directory = Path(out_directory)
+    
     # create directory if it does not exist
-    if not os.path.isdir(out_dir):
-        os.makedirs(out_dir, exist_ok=True)
+    if not out_directory.is_dir():
+        out_directory.mkdir(parents=True)
     
     filters = ["g", "r", "i"]
     
     for i in tqdm(range(n_flats), desc="Generating flats", bar_format=bar_format):
         create_flats(
-            out_dir,
+            out_directory,
             filters,
             i,
             binning_scale,
             overwrite,
             )
 
+
 def setup_obs(
-    out_dir: str,
+    out_directory: Path,
     binning_scale: int,
     ) -> Tuple[int, NDArray, NDArray]:
     """
@@ -410,7 +425,7 @@ def setup_obs(
     
     Parameters
     ----------
-    out_dir : str
+    out_directory : Path
         The output directory.
     binning_scale : int
         The image binning scale.
@@ -422,8 +437,8 @@ def setup_obs(
     """
     
     # create directory if it does not exist
-    if not os.path.isdir(out_dir):
-        os.makedirs(out_dir)
+    if not out_directory.is_dir():
+        out_directory.mkdir(parents=True)
     
     rng = np.random.default_rng(123)
     
@@ -446,8 +461,9 @@ def setup_obs(
     
     return variable_source, source_positions, fluxes
 
+
 def generate_observations(
-    out_dir: str,
+    out_directory: Path | str,
     n_images: int = 100,
     circular_aperture: bool = True,
     binning_scale: int = 4,
@@ -458,7 +474,7 @@ def generate_observations(
     
     Parameters
     ----------
-    out_dir : str
+    out_directory : Path | str
         The directory to save the data.
     n_images : int, optional
         The number of images to create, by default 100.
@@ -470,14 +486,16 @@ def generate_observations(
         Whether to overwrite data if they currently exist, by default False.
     """
     
+    out_directory = Path(out_directory)
+    
     variable_source, source_positions, fluxes = setup_obs(
-        out_dir=out_dir,
+        out_directory=out_directory,
         binning_scale=binning_scale,
         )
     
     for i in tqdm(range(n_images), desc="Generating observations", bar_format=bar_format):
         create_images(
-            out_dir=out_dir,
+            out_directory=out_directory,
             variable_source=variable_source,
             source_positions=source_positions,
             fluxes=fluxes,
@@ -489,7 +507,7 @@ def generate_observations(
 
 
 def generate_gappy_observations(
-    out_dir: str,
+    out_directory: Path | str,
     n_images: int = 1000,
     circular_aperture: bool = True,
     binning_scale: int = 4,
@@ -500,7 +518,7 @@ def generate_gappy_observations(
     
     Parameters
     ----------
-    out_dir : str
+    out_directory : Path | str
         The directory to save the data.
     n_images : int, optional
         The number of images to create, by default 100.
@@ -512,8 +530,10 @@ def generate_gappy_observations(
         Whether to overwrite data if they currently exist, by default False.
     """
     
+    out_directory = Path(out_directory)
+    
     variable_source, source_positions, fluxes = setup_obs(
-        out_dir=out_dir,
+        out_directory=out_directory,
         binning_scale=binning_scale,
         )
     
@@ -531,7 +551,7 @@ def generate_gappy_observations(
             gap_probability = .02  # reset the probability of skipping the next image
         
         create_images(
-            out_dir=out_dir,
+            out_directory=out_directory,
             variable_source=variable_source,
             source_positions=source_positions,
             fluxes=fluxes,

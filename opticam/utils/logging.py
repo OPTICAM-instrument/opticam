@@ -1,79 +1,45 @@
 import json
 import os
+from pathlib import Path
 from types import FunctionType
-from typing import Any, Dict, List
-
-from astropy.io import fits
-
-from opticam.utils.constants import pixel_scales
+from typing import Any, Dict
 
 
-def log_binnings(
-    file_paths: List[str],
-    out_directory: str,
+
+
+def log_file(
+    out_directory: Path,
+    file_name: str,
+    file_contents: Dict[Any, Any],
     ) -> None:
     """
-    Log the binning of each file to out_directory/diag/binnings.json.
+    Log `file_contents` to a JSON file in `out_directory/diag/`.
     
     Parameters
     ----------
-    file_paths : List[str]
-        The paths to the files.
-    out_directory : str
-        The directory to save the log.
+    out_directory : Path
+        The output directory.
+    file_name : str
+        The name of the diagnostic file. A `.json' suffix is automatically added.
+    file_contents : Dict[Any, Any]
+        The contents that will be saved to the file.
     """
-    
-    file_binnings = {}
-    
-    for file in file_paths:
-        with fits.open(file) as hdul:
-            binning = hdul[0].header["BINNING"]
-        if binning in file_binnings:
-            file_binnings[binning].append(file)
-        else:
-            file_binnings[binning] = [file]
     
     dir_path = os.path.join(out_directory, 'diag')
     if not os.path.isdir(dir_path):
         os.makedirs(dir_path, exist_ok=True)
     
-    file_path = os.path.join(dir_path, 'binnings.json')
+    if not file_name.endswith('.json'):
+        file_name += '.json'
+    
+    file_path = os.path.join(dir_path, file_name)
+    
     with open(file_path, "w") as json_file:
-        json.dump(file_binnings, json_file, indent=4)
-
-
-def log_filters(
-    file_paths: List[str],
-    out_directory: str,
-    ) -> None:
-    """
-    Logs the filters used in each file to out_directory/diag/filters.json.
-    
-    Parameters
-    ----------
-    file_paths : List[str]
-        The paths to the files.
-    out_directory : str
-        The directory to save the log.
-    """
-    
-    file_filters = {}
-    
-    for file in file_paths:
-        with fits.open(file) as hdul:
-            fltr = hdul[0].header["FILTER"]
-        if fltr in file_filters:
-            file_filters[fltr].append(file)
-        else:
-            file_filters[fltr] = [file]
-    
-    dir_path = os.path.join(out_directory, 'diag')
-    if not os.path.isdir(dir_path):
-        os.makedirs(dir_path, exist_ok=True)
-    
-    file_path = os.path.join(dir_path, 'filters.json')
-    with open(file_path, "w") as json_file:
-        json.dump(file_filters, json_file, indent=4)
+        json.dump(
+            file_contents,
+            json_file,
+            indent=4,
+            )
 
 
 def recursive_log(param: Any, depth: int = 0, max_depth: int = 5) -> Any:
@@ -113,10 +79,11 @@ def recursive_log(param: Any, depth: int = 0, max_depth: int = 5) -> Any:
 
 
 def log_psf_params(
-    out_directory: str,
+    out_directory: Path,
     psf_params: Dict[str, Dict[str, float]],
     binning_scale: int,
     rebin_factor: int,
+    pixel_scales: Dict[str, float],
     ) -> None:
     """
     Log the PSF parameters.
@@ -126,11 +93,13 @@ def log_psf_params(
     out_directory : str
         The path to the output directory.
     psf_params : Dict[str, Dict[str, float]]
-        The PSF parameters.
+        The PSF parameters {filter: {PSF param: value}}.
     binning_scale : int
         The observation binning scale.
     rebin_factor : int
         The software rebinning factor.
+    pixel_scales : Dict[str, float]
+        The pixel scale for each filter in arcsec/pixel {filter: pixel scale}.
     """
     
     psf_params_full = {}

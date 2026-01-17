@@ -1,14 +1,19 @@
-from photutils.aperture import Aperture, ApertureStats, EllipticalAnnulus
 from abc import ABC, abstractmethod
-from numpy.typing import NDArray
 from typing import Tuple
+
+
+from photutils.aperture import Aperture, ApertureStats, EllipticalAnnulus
+from numpy.typing import NDArray
 from astropy.stats import SigmaClip
+
+
 
 
 class BaseLocalBackground(ABC):
     """
     Base class for local background estimators.
     """
+
 
     def __init__(
         self,
@@ -34,6 +39,7 @@ class BaseLocalBackground(ABC):
         self.r_in_scale = r_in_scale
         self.r_out_scale = r_out_scale
         self.sigma_clip = sigma_clip
+
 
     @abstractmethod
     def __call__(
@@ -67,6 +73,7 @@ class BaseLocalBackground(ABC):
         
         pass
 
+
     @abstractmethod
     def get_annulus(
         self,
@@ -96,6 +103,7 @@ class BaseLocalBackground(ABC):
         """
         
         pass
+
 
     def get_stats(
         self,
@@ -141,10 +149,13 @@ class BaseLocalBackground(ABC):
             )
 
 
+
+
 class DefaultLocalBackground(BaseLocalBackground):
     """
     Default local background estimator using an elliptical annulus.
     """
+
 
     def get_annulus(
         self,
@@ -181,6 +192,7 @@ class DefaultLocalBackground(BaseLocalBackground):
             self.r_in_scale * semiminor_axis,
             theta,
             )
+
 
     def __call__(
         self,

@@ -1,15 +1,19 @@
 from abc import ABC, abstractmethod
 from typing import Tuple
 
+
 from numpy.typing import NDArray
 from photutils.background import Background2D
+
+
 
 
 class BaseBackground(ABC):
     """
     Base class for OPTICAM background estimators.
     """
-    
+
+
     def __init__(
         self,
         box_size: int | Tuple[int, int],
@@ -29,7 +33,8 @@ class BaseBackground(ABC):
             assert len(box_size) == 2, "[OPTICAM] Incompatible box_size parameter passed to DefaultBackground. box_size must be either an integer or an interable of dimensions (e.g., [height, width])."
         
         self.box_size = box_size
-    
+
+
     @abstractmethod
     def __call__(
         self,
@@ -52,11 +57,14 @@ class BaseBackground(ABC):
         pass
 
 
+
+
 class DefaultBackground(BaseBackground):
     """
     Default background estimator.
     """
-    
+
+
     def __call__(
         self,
         image: NDArray,

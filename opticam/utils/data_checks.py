@@ -1,47 +1,47 @@
 from functools import partial
 from logging import Logger
 from multiprocessing import cpu_count
+from pathlib import Path
+import re
 from typing import Callable, Dict, List, Tuple
 import warnings
-import os.path
+
 
 import numpy as np
 from tqdm.contrib.concurrent import process_map
 from tqdm import tqdm
 
+
 from opticam.utils.constants import bar_format
 from opticam.utils.fits_handlers import get_header_info
-from opticam.utils.helpers import create_file_paths, sort_filters
-from opticam.utils.logging import log_binnings, log_filters
+from opticam.utils.helpers import create_file_paths, sort_dict_by_filters
+from opticam.utils.logging import log_file
+from opticam.instruments import Instrument
 
 
-def check_data(
-    out_directory: str,
-    data_directory: None | str = None,
-    c1_directory: None | str = None,
-    c2_directory: None | str = None,
-    c3_directory: None | str = None,
+
+
+def scan_data(
+    out_directory: Path | str,
+    data_directory: Path | str,
+    instrument: Instrument,
     barycenter: bool = True,
     verbose: bool = True,
     return_output: bool = False,
     logger: Logger | None = None,
     number_of_processors = cpu_count() // 2,
-    ) -> None | Tuple[Dict[str, List[str]], int, Dict[str, float], List[str], Dict[str, float], Dict[str, float], float]:
+    ) -> None | Tuple[Dict[str, List[Path]], int, Dict[Path, float], List[Path], float]:
     """
     Check that the data are self-consistent.
     
     Parameters
     ----------
-    out_directory : str
+    out_directory : Path | str
         The directory path to which any output files will be saved.
-    data_directory : None | str, optional
-        The directory path to the data for all three cameras, by default None.
-    c1_directory : None | str, optional
-        The directory path to the data for Camera 1, by default None.
-    c2_directory : None | str, optional
-        The directory path to the data for Camera 2, by default None
-    c3_directory : None | str, optional
-        The directory path to the data for Camera 3, by default None
+    data_directory : Path | str
+        The directory path to the data.
+    instrument : Instrument
+        The instrument.
     barycenter : bool, optional
         Whether to apply a Barycentric correction to the image time stamps, by default True.
     verbose : bool, optional
@@ -55,27 +55,35 @@ def check_data(
     
     Returns
     -------
-    None | Tuple[Dict[str, str], int, Dict[str, float], List[str], Dict[str, float], float]
-        If `return_output=True`, the file paths, binning scale, Barycentric MJD dates, ignored files, file gains, and
-        the reference date are returned. Otherwise, nothing is returned.
+    None | Tuple[Dict[str, List[Path]], int, Dict[Path, float], List[Path], float]
+        If `return_output=True`, the file paths, binning scale, Barycentric MJD dates, ignored files, and the reference
+        date are returned. Otherwise, nothing is returned.
     """
     
-    file_paths = create_file_paths(
-        data_directory=data_directory,
-        c1_directory=c1_directory,
-        c2_directory=c2_directory,
-        c3_directory=c3_directory,
-        )
+    out_directory = Path(out_directory)
+    data_directory = Path(data_directory)
     
-    camera_files = {}  # filter : [files]
+    file_paths = create_file_paths(data_directory=data_directory)
+    
+    # check instrument
+    errors = instrument.run_checks(
+        file_paths[0],
+        return_errors=True,
+        )
+    if errors == 1:
+        raise ValueError(f'[OPTICAM] {errors} Instrument error needs to be resolved.')
+    elif errors > 1:
+        raise ValueError(f'[OPTICAM] {errors} Instrument errors need to be resolved.')
+    
+    camera_files: Dict[str, List[Path]] = {}  # {filter : [files]}
     
     # scan files
-    chunksize = max(1, len(file_paths) // 100)  # set chunksize to 1% of the number of files
+    chunksize = max(1, len(file_paths) // 100)  # set chunksize to ~1% of the number of files
     results = process_map(
         partial(
             get_header_info,
+            instrument=instrument,
             barycenter=barycenter,
-            logger=logger,
             ),
         file_paths,
         max_workers=number_of_processors,
@@ -86,7 +94,7 @@ def check_data(
         tqdm_class=tqdm)
     
     # unpack results
-    binning_scale, bmjds, filters, gains, darkcurrs, ignored_files = parse_header_results(
+    binning, bmjds, filters, ignored_files = parse_header_results(
         results=results,
         file_paths=file_paths,
         out_directory=out_directory,
@@ -94,15 +102,15 @@ def check_data(
         )
     
     # for each unique filter
-    for fltr in np.unique(list(filters.values())):
-        camera_files.update({fltr + '-band': []})  # prepare dictionary entry
+    for fltr in set(filters.values()):
+        camera_files.update({fltr: []})  # prepare dictionary entry
         for file in file_paths:
             if file not in ignored_files:
                 if filters[file] == fltr:
-                    camera_files[fltr + '-band'].append(file)  # add file name to dict list
+                    camera_files[fltr].append(file)  # add file name to dict list
     
     # sort camera files so filters match camera order
-    camera_files = sort_filters(camera_files)
+    camera_files: Dict[str, List[Path]] = sort_dict_by_filters(camera_files)
     
     # sort files by time
     for key in list(camera_files.keys()):
@@ -112,7 +120,7 @@ def check_data(
     
     output = partial(
         data_checks_output,
-        binning_scale=binning_scale,
+        binning=binning,
         camera_files=camera_files)
     if logger:
         output(func=logger.info)
@@ -120,23 +128,24 @@ def check_data(
         output(func=print)
     
     if return_output:
-        return camera_files, binning_scale, bmjds, ignored_files, gains, darkcurrs, t_ref
+        
+        return camera_files, get_binning_scale(binning), bmjds, ignored_files, t_ref
 
 
 def parse_header_results(
-    results: Tuple[float, float, str, str, float],
-    file_paths: List[str],
-    out_directory: str,
+    results: Tuple[List[float], List[float], List[str], List[str], List[float]],
+    file_paths: List[Path],
+    out_directory: Path,
     logger: Logger | None,
-    ) -> Tuple[int, Dict[str, float], Dict[str, str], Dict[str, float], Dict[str, float], List[str]]:
+    ) -> Tuple[str, Dict[Path, float], Dict[Path, str], List[Path]]:
     """
     Parse the header info results.
     
     Parameters
     ----------
-    results : Tuple[float, float, str, str, float]
+    results : Tuple[List[float], List[float], List[str], List[str], List[float]]
         The header info results.
-    file_paths : List[str]
+    file_paths : List[Path]
         The file paths.
     out_directory : str
         The directory path to which any output files will be saved.
@@ -145,8 +154,8 @@ def parse_header_results(
     
     Returns
     -------
-    Tuple[int, Dict[str, float], Dict[str, str], Dict[str, float], Dict[str, float], List[str]]
-        The binning scale, BMJD dates, filters, gains, dark currents, and ignored files.
+    Tuple[str, Dict[Path, float], Dict[Path, str], List[Path]]
+        The binning scale, BMJD dates, filters, and ignored files.
     
     Raises
     ------
@@ -156,43 +165,43 @@ def parse_header_results(
         If more than one binning mode is detected.
     """
     
-    bmjds = {}
-    filters = {}
-    binnings = {}
-    gains = {}
-    darkcurrs = {}
-    ignored_files = []
+    binnings: Dict[Path, str] = {}
+    bmjds: Dict[Path, float] = {}
+    exposures: Dict[Path, float] = {}
+    filters: Dict[Path, str] = {}
+    ignored_files: List[Path] = []
     
     # unpack results
-    raw_bmjds, raw_filters, raw_binnings, raw_gains, raw_darkcurrs = zip(*results)
+    raw_bmjds, raw_exposures, raw_filters, raw_binnings = zip(*results)
     
     # consolidate results
     for i in range(len(raw_bmjds)):
         if raw_bmjds[i] is not None:
-            bmjds.update({file_paths[i]: raw_bmjds[i]})
-            filters.update({file_paths[i]: raw_filters[i]})
             binnings.update({file_paths[i]: raw_binnings[i]})
-            gains.update({file_paths[i]: raw_gains[i]})
-            darkcurrs.update({file_paths[i]: raw_darkcurrs[i]})
+            bmjds.update({file_paths[i]: raw_bmjds[i]})
+            exposures.update({file_paths[i]: raw_exposures[i]})
+            filters.update({file_paths[i]: raw_filters[i]})
         else:
             ignored_files.append(file_paths[i])
     
-    # ensure there are no more than three filters
-    unique_filters = np.unique(list(filters.values()))
-    if unique_filters.size > 3:
-        log_filters([file_path for file_path in file_paths if file_path not in ignored_files],
-                    out_directory)
-        raise ValueError(f"[OPTICAM] More than three filters found. Image filters have been logged to {os.path.join(out_directory, 'diag/filters.json')}.")
+    # get unique filters
+    unique_filters = set(filters.values())
     
     # ensure there is at most one type of binning
-    unique_binning = np.unique(list(binnings.values()))
-    if len(unique_binning) > 1:
-        log_binnings([file_path for file_path in file_paths if file_path not in ignored_files],
-                        out_directory)
-        raise ValueError(f"[OPTICAM] Inconsistent binning detected. All images must have the same binning. Image binnings have been logged to {os.path.join(out_directory, 'diag/binnings.json')}.")
-    else:
-        binning = unique_binning[0]
-        binning_scale = int(binning[0])
+    unique_binnings = set(binnings.values())
+    if len(unique_binnings) > 1:
+        log_file(
+            out_directory=out_directory,
+            file_name='binnings.json',
+            file_contents=binnings,
+            )
+        string = f"[OPTICAM] Inconsistent binning detected. All images must have the same binning. Image binnings have been logged to {out_directory.joinpath('diag/binnings.json')}."
+        if logger is not None:
+            logger.error(string)
+        raise ValueError(string)
+    elif len(unique_binnings) == 0:
+        raise ValueError(f'[OPTICAM] No binning values detected.')
+    unique_binning = unique_binnings.pop()  # get unique binning
     
     # check for large differences in time
     for fltr in unique_filters:
@@ -208,12 +217,24 @@ def parse_header_results(
                 if logger:
                     logger.warning(string)
     
-    return binning_scale, bmjds, filters, gains, darkcurrs, ignored_files
+    # check all images use the same exposure time
+    if len(set(exposures.values())) > 1:
+        log_file(
+            out_directory=out_directory,
+            file_name='exposures.json',
+            file_contents=exposures,
+            )
+        string = f'[OPTICAM] Inconsistent exposure times detected. This is not necessarily a problem, but may cause issues with Fourier transforms later on. Image exposure times have been logged to {out_directory.joinpath('diag/exposures.json')}.'
+        if logger:
+            logger.warning(string)
+        warnings.warn(string)
+    
+    return unique_binning, bmjds, filters, ignored_files
 
 
 def data_checks_output(
-    binning_scale: int,
-    camera_files: Dict[str, str],
+    binning: str,
+    camera_files: Dict[str, List[Path]],
     func: Callable,
     ) -> None:
     """
@@ -221,21 +242,41 @@ def data_checks_output(
     
     Parameters
     ----------
-    binning_scale : int
-        The data binning scale.
-    camera_files : Dict[str, str]
+    binning : str
+        The image binning.
+    camera_files : Dict[str, List[Path]]
         The image files separated by filter.
     func : Callable
         The output function (i.e., `print` or `logger.info`)
     """
     
-    func(f'[OPTICAM] Binning: {binning_scale}x{binning_scale}')
+    func(f'[OPTICAM] Binning: {binning}')
     func(f'[OPTICAM] Filters: {", ".join(list(camera_files.keys()))}')
     for fltr in list(camera_files.keys()):
         func(f'[OPTICAM] {len(camera_files[fltr])} {fltr} images.')
 
 
-
+def get_binning_scale(binning: str) -> int:
+    """
+    Given a binning mode string, extract the x and y binning scales as integers.
+    
+    Parameters
+    ----------
+    binning : str
+        The binning mode string (e.g., "2x2", "1 2", etc.). The first number is assumed to be the binning scale in x,
+        while the second number is assumed to be the binning scale in y.
+    
+    Returns
+    -------
+    int
+        The binning scale.
+    """
+    
+    x, y = map(int, re.findall(r"\d+", binning))
+    
+    assert(x == y), f'[OPTICAM] Anisotropic binning detected: {binning}. Currently, OPTICAM only supports isotropic binning modes. We apologise for the inconvenience.'
+    
+    return x
 
 
 

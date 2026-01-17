@@ -1,10 +1,15 @@
 from typing import Dict
 
+
 import numpy as np
 from numpy.typing import NDArray
-from scipy.optimize import curve_fit
+from scipy.optimize import curve_fit  # TODO: replace with astropy modelling?
+
 
 from opticam.fitting.models import power_law, straight_line
+
+
+
 
 def fit_rms_vs_flux(
     data: Dict,
@@ -32,26 +37,29 @@ def fit_rms_vs_flux(
             rms.append(values['rms'])
             flux.append(values['flux'])
         
+        flux = np.array(flux)
+        rms = np.array(rms)
+        
         order = np.argsort(flux)
-        x = np.array(flux)[order]
-        y = np.array(rms)[order]
+        flux = flux[order]
+        rms = rms[order]
         
         popt, pcov = curve_fit(
                 straight_line,
-                np.log10(x),
-                np.log10(y),
+                np.log10(flux),
+                np.log10(rms),
                 )
         
-        y_model = power_law(
-            x,
+        rms_model = power_law(
+            flux,
             10**popt[1],
             popt[0],
             )
         
         pl_fits[fltr] = {
-            'flux': x,
-            'rms': y_model,
-            'err': .05 * y_model,  # 5% error
+            'flux': flux,
+            'rms': rms_model,
+            'err': .05 * rms_model,  # 5% error
         }
     
     return pl_fits

@@ -2,6 +2,8 @@ import numpy as np
 from numpy.typing import NDArray
 
 
+
+
 def gaussian(
     x: NDArray,
     amp: float,
