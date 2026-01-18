@@ -101,51 +101,45 @@ class Instrument(ABC):
         
         if self.exptime_kw not in keys:
             errors += 1
-            print(f'[OPTICAM] ERROR: instrument.exptime_kw ({self.exptime_kw}) is not a valid header key for file {file_path}.')
+            print(f'[OPTICAM] ERROR: {self.__class__.__name__}.exptime_kw ({self.exptime_kw}) is not a valid header keyword for file {file_path}.')
         
         if self.filter_kw not in keys:
             errors += 1
-            print(f'[OPTICAM] ERROR: instrument.filter_kw ({self.filter_kw}) is not a valid header key for file {file_path}.')
+            print(f'[OPTICAM] ERROR: {self.__class__.__name__}.filter_kw ({self.filter_kw}) is not a valid header keyword for file {file_path}.')
         else:
             try:
                 fltr = self.get_filter(header=header)
                 assert(isinstance(fltr, str))
             except Exception as e:
                 errors += 1
-                print(f'[OPTICAM] ERROR: instrument.get_filter() failed due to the following exception: {e}.')
+                print(f'[OPTICAM] ERROR: {self.__class__.__name__}.get_filter() failed due to the following exception: {e}.')
         
         if self.gain_kw not in keys:
             errors += 1
-            print(f'[OPTICAM] ERROR: instrument.gain_kw ({self.gain_kw}) is not a valid header key for file {file_path}.')
+            print(f'[OPTICAM] ERROR: {self.__class__.__name__}.gain_kw ({self.gain_kw}) is not a valid header keyword for file {file_path}.')
         
         if self.dateobs_kw not in keys:
             errors += 1
-            print(f'[OPTICAM] ERROR: instrument.dateobs_kw ({self.dateobs_kw}) is not a valid header key for file {file_path}.')
+            print(f'[OPTICAM] ERROR: {self.__class__.__name__}.dateobs_kw ({self.dateobs_kw}) is not a valid header keyword for file {file_path}.')
         
         if self.filter_kw in keys:
             try:
                 self.pixel_scales[self.get_filter(header=header)]
             except Exception as e:
                 errors += 1
-                print(f'[OPTICAM] ERROR: instrument.pixel_scales does not contain a corresponding value for the filter {self.get_filter(header=header)}.')
+                print(f'[OPTICAM] ERROR: {self.__class__.__name__}.pixel_scales does not contain a corresponding value for the filter {self.get_filter(header=header)}.')
         
         try:
             self.get_binning(file_path=file_path)
         except Exception as e:
             errors += 1
-            print(f'[OPTICAM] ERROR: failed to read image binning for file {file_path} due to the exception {e}. This is either due to an incorrect value being passed to binning_kw, or your images do not contain a binning keyword. In the latter case, you will need to define a custom instrument with a custom get_binning() method. See (TODO: link) for more details.')
+            print(f'[OPTICAM] ERROR: failed to read image binning for file {file_path} due to the exception {e}. This is either due to an incorrect value being passed to binning_kw and/or your images do not contain a binning keyword. In the latter case, you will need to define a custom instrument with a custom get_binning() method. See (TODO: link) for details.')
         
         try:
             Time(self.get_mjd(file_path=file_path), format='mjd')
         except Exception as e:
             errors += 1
-            print(f'[OPTICAM] ERROR: Failed to parse the MJD of the image due the following exception: {e}')
-        
-        try:
-            self.get_sky_coord(file_path=file_path)
-        except Exception as e:
-            errors += 1
-            print(f'[OPTICAM] ERROR: instrument.get_sky_coord() failed due to the following exception: {e}')
+            print(f'[OPTICAM] ERROR: Failed to parse the MJD of the image due the following exception: {e}. This is likely due to an incorrect value being passed to dateobs_kw and/or your images do not give timestamps in FITS format. In the latter case, you will need to define a custom instrument with a custom get_mjd() method. See (TODO: link) for details.')
         
         ################################################### warnings ###################################################
         
@@ -154,14 +148,21 @@ class Instrument(ABC):
         
         if self.ra_kw not in keys:
             warnings += 1
-            print(f'[OPTICAM] WARNING: instrument.ra_kw ({self.ra_kw}) is not a valid header key for file {file_path}. Barycentric corrections will not be possible. This is either due to an inccorect value being passed to ra_kw, or your images do not contain coordinate information. In the latter case, you can ignore this message but must pass barycenter=False when using this instrument to create an opticam.Reducer instance.')
+            print(f'[OPTICAM] WARNING: {self.__class__.__name__}.ra_kw ({self.ra_kw}) is not a valid header keyword for file {file_path}.')
+        
         if self.dec_kw not in keys:
             warnings += 1
-            print(f'[OPTICAM] WARNING: instrument.dec_kw ({self.dec_kw}) is not a valid header key for file {file_path}. Barycentric corrections will not be possible. This is either due to an inccorect value being passed to dec_kw, or your images do not contain coordinate information. In the latter case, you can ignore this message but must pass barycenter=False when using this instrument to create an opticam.Reducer instance.')
+            print(f'[OPTICAM] WARNING: {self.__class__.__name__}.dec_kw ({self.dec_kw}) is not a valid header keyword for file {file_path}.')
+        
+        try:
+            self.get_sky_coord(file_path=file_path)
+        except Exception as e:
+            warnings += 1
+            print(f'[OPTICAM] Warning: {self.__class__.__name__}.get_sky_coord() failed due to the following exception: {e}. Barycentric correction will not be possible. If this is a mistake, check the specified RA and DEC keywords ({self.ra_kw} and {self.dec_kw}, respectively) are present in your image headers. If they are present, then they are likely in an unrecognised format. In this case, you will need to define a custom instrument with a custom get_sky_coord() method. See (TODO: link) for details.')
         
         if self.dark_curr_kw not in keys:
             warnings += 1
-            print(f'[OPTICAM] WARNING: instrument.dark_curr_kw ({self.dark_curr_kw}) is not a valid header key for file {file_path}. If no dark current is listed in the image headers, dark images can be used alongside a `opticam.DarkNoiseCorrector` instance to correct for the dark noise.')
+            print(f'[OPTICAM] WARNING: {self.__class__.__name__}.dark_curr_kw ({self.dark_curr_kw}) is not a valid header keyword for file {file_path}. If no dark current is listed in the image headers, you will need to use a `opticam.DarkNoiseCorrector` instance to correct for dark noise. See (TODO: link) for details.')
         
         ################################################### summary ###################################################
         
@@ -169,17 +170,17 @@ class Instrument(ABC):
             print()  # blank line for readibility
         
         if errors == 0:
-            print(f'[OPTICAM] Instrument sucessfully passed all checks.')
+            print(f'[OPTICAM] {self.__class__.__name__} sucessfully passed all checks.')
         else:
             if errors == 1:
-                print('[OPTICAM] Instrument failed 1 check.')
+                print(f'[OPTICAM] {self.__class__.__name__} failed 1 check.')
             else:
-                print(f'[OPTICAM] Instrument failed {errors} checks.')
+                print(f'[OPTICAM] {self.__class__.__name__} failed {errors} checks.')
         
         if warnings == 1:
-            print('[OPTICAM] Instrument triggered a warning during 1 check. Warnings may be ignored provided their caveats are satisfied.')
+            print(f'[OPTICAM] {self.__class__.__name__} triggered a warning during 1 check. Warnings may be ignored provided their caveats are satisfied.')
         elif warnings > 1:
-            print(f'[OPTICAM] Instrument triggered a warning during {warnings} checks. Warnings may be ignored provided their caveats are satisfied.')
+            print(f'[OPTICAM] {self.__class__.__name__} triggered a warning during {warnings} checks. Warnings may be ignored provided their caveats are satisfied.')
         
         if return_errors:
             return errors
@@ -209,11 +210,8 @@ class Instrument(ABC):
         if header is None:
             header: Header = fits.getheader(file_path)
         
-        try:
-            timestamp = str(header[self.dateobs_kw])
-            mjd = float(np.asarray(Time(timestamp, format="fits").mjd))
-        except Exception as e:
-            raise ValueError(f'[OPTICAM] Unable to get MJD of file {file_path} due to the following exception: {e}. If using a custom instrument, it is likely that either the dateobs_kw does not exist in the image header or, if it does, the timestamp is not given in FITS format; in this case, you will need to define your instrument as a class, inheriting from opticam.Instrument, and implement a custom get_mjd() method that parses the timestamp into an MJD. See [TODO: link to instruments tutorial] for more details.')
+        timestamp = str(header[self.dateobs_kw])
+        mjd = float(np.asarray(Time(timestamp, format="fits").mjd))
         
         return mjd
 
@@ -242,14 +240,11 @@ class Instrument(ABC):
         if header is None:
             header: Header = fits.getheader(file_path)
         
-        try:
-            sky_coord =  SkyCoord(
-                header[self.ra_kw],
-                header[self.dec_kw],
-                unit=(u.hourangle, u.deg),
-                )
-        except Exception as e:
-            raise ValueError(f'[OPTICAM] Unable to get sky coord of file {file_path} due to the following exception: {e}. If using a custom instrument, it is likely that the ra_kw and/or dec_kw rows do not exist in the image header or, if they do, the values are not given in the expected units (hour angle for RA and degrees for DEC). If your instrument uses different units, you will need to define your instrument as a class, inheriting from opticam.Instrument, and implement a custom get_sky_coord() method that parses the sky coordinates into an astropy.coordinates.SkyCoord object. See [TODO: link to instruments tutorial] for more details.')
+        sky_coord =  SkyCoord(
+            header[self.ra_kw],
+            header[self.dec_kw],
+            unit=(u.hourangle, u.deg),
+            )
         
         return sky_coord
 
@@ -526,6 +521,7 @@ def create_template() -> Dict[str, Any]:
 
 
 
+
 class OPTICAM_MX(Instrument):
     """
     OPTICAM-MX instrument. For use with OPTICAM-MX data taken after 2022. For OPTICAM-MX observations taken in 2022,
@@ -585,7 +581,6 @@ class OPTICAM_MX(Instrument):
 
 
 
-
 # TODO: check when this is needed
 class OPTICAM_MX_UNKNOWN(OPTICAM_MX):
 
@@ -598,7 +593,7 @@ class OPTICAM_MX_UNKNOWN(OPTICAM_MX):
 
 
 
-# TODO: fix this instrument
+# TODO: check when this is needed
 class OPTICAM_MX_2022(OPTICAM_MX):
     """
     Legacy OPTICAM-MX instrument. For use with OPTICAM-MX data taken in 2022. For OPTICAM-MX observations taken after
@@ -620,3 +615,12 @@ class OPTICAM_MX_2022(OPTICAM_MX):
         mjd = float(np.asarray(Time(f'{date}T{time}', format='fits').mjd))
         
         return mjd
+
+
+
+
+
+
+
+
+
