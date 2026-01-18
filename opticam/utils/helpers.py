@@ -182,7 +182,12 @@ def get_lc(
             new_colnames.append(colname)
     
     lc = light_curves[*new_colnames]
-    lc.remove_rows(np.where(np.isnan(lc[f'{fltr}_rel_flux']).mask)[0])
+    
+    # remove NaN rows
+    f = np.asarray(lc[f'{fltr}_rel_flux'].value)
+    ferr = np.asarray(lc[f'{fltr}_rel_flux_err'].value)
+    mask = np.where(np.isnan(f) | np.isnan(ferr))[0]
+    lc.remove_rows(mask)
     
     return lc
 
