@@ -1,8 +1,8 @@
 from pathlib import Path
-from typing import Callable, Dict, List, Literal, Tuple
+from typing import Dict, List, Literal, Tuple
 
 
-from astropy.table import MaskedColumn, vstack
+from astropy.table import MaskedColumn, Table, QTable, vstack
 from astropy.time import Time
 from astropy.timeseries import aggregate_downsample, BinnedTimeSeries, LombScargle, LombScargleMultiband, TimeSeries
 import astropy.units as u
@@ -142,25 +142,11 @@ class Analyzer:
             A new `Analyzer` instance containing the binned light curves.
         """
         
-        if method == 'mean':
-            aggregate_func = aggregate_mean
-        else:
-            raise NotImplementedError(f'[OPTICAM] Rebinning light curves using method="sum" is not supported yet. We apologise for the inconvenience.')
-        
-        binned_lcs: BinnedTimeSeries =  aggregate_downsample(
-            time_series=self.light_curves,
-            aggregate_func=aggregate_func,
+        new_lcs = rebin(
+            method=method,
+            light_curves=self.light_curves,
             time_bin_size=time_bin_size,
             )
-        
-        # convert BinnedTimeSeries into a regular TimeSeries
-        # time values of new TimeSeries are in the middle of the bins
-        new_lcs = TimeSeries(
-            time=binned_lcs['time_bin_start'] + binned_lcs['time_bin_size'] / 2,
-            )
-        for col in binned_lcs.colnames:
-            if col not in ['time_bin_start', 'time_bin_end', 'time_bin_size']:
-                new_lcs.add_column(binned_lcs[col], name=col)
         
         return Analyzer(
             out_directory=self.out_directory,
@@ -237,12 +223,13 @@ class Analyzer:
         save : bool, optional
             Whether to save the resulting plot, by default `True`.
         return_fig : bool, optional
-            _description_, by default False
-
+            Whether to return the figure, by default `False`. Useful if you want to edit the figure before saving.
+        
         Returns
         -------
         Dict[str, LombScargle] | Tuple[Dict[str, LombScargle], Figure]
-            _description_
+            If `return_fig=True`, the Lomb-Scargle periodograms and figure are returned. Otherwise, only the
+            Lomb-Scargle periodograms are returned.
         """
         
         nrows: int = len(self.filters)
@@ -327,6 +314,27 @@ class Analyzer:
         save: bool = True,
         return_fig: bool = False,
         ) -> LombScargleMultiband | Tuple[LombScargleMultiband, Figure]:
+        """
+        Compute the multiband Lomb-Scargle periodogram from all light curves.
+        
+        Parameters
+        ----------
+        frequency : Quantity | None, optional
+            The frequency grid, by default `None`. If `None`, the `autofrequency()` method of `astropy`'s
+            `LombScargleMultiband` class is used to generate a frequency grid.
+        scale : Literal[&#39;linear&#39;, &#39;semilogx&#39;, &#39;semilogy&#39;, &#39;loglog&#39;], optional
+            The scale for the resulting plot, by default `'linear'`.
+        save : bool, optional
+            Whether to save the resulting plot, by default `True`.
+        return_fig : bool, optional
+            Whether to return the figure, by default `False`. Useful if you want to edit the figure before saving.
+        
+        Returns
+        -------
+        LombScargleMultiband | Tuple[LombScargleMultiband, Figure]
+            If `return_fig=True`, the multiband Lomb-Scargle periodogram and figure are returned. Otherwise, only the
+            multiband Lomb-Scargle periodogram is returned.
+        """
         
         fig, ax = plt.subplots(
             tight_layout=True,
@@ -398,15 +406,46 @@ class Analyzer:
         self,
         period: Quantity,
         epoch_time: Time | None = None,
+        nbins: int | None = None,
+        sharey: bool = False,
         save: bool = True,
         return_fig: bool = False,
-        ) -> TimeSeries | Tuple[TimeSeries, Figure]:
+        ) -> Table | Tuple[Table, Figure]:
+        """
+        Fold the light curves on the given period.
+        
+        Parameters
+        ----------
+        period : Quantity
+            The period used to fold the light curves. Must have units of time.
+        epoch_time : Time | None, optional
+            The reference time that defines zero phase, by default `None`. If `None`, the first time light curve time
+            value is used.
+        nbins : int | None, optional
+            Bin the folded light curve into this many bins, by default `None`. If `None`, no binning is performed.
+        sharey : bool, optional
+            Whether to share y axes, by default `False`.
+        save : bool, optional
+            Whether to save the figure, by default `True`.
+        return_fig : bool, optional
+            Whether to return the figure, by default `False`. Useful if you want to edit the figure before saving.
+        
+        Returns
+        -------
+        Table | Tuple[Table, Figure]
+            If `return_fig=True`, the folded light curve and resulting figure are returned. Otherwise, just the folded
+            time series is returned. The folded light curve is converted from a `TimeSeries` to a `Table` since the
+            `fold()` method of `TimeSeries` replaces the time column with phase values, causing time formatting errors.
+        """
+        
+        phase_bin = isinstance(nbins, int)
         
         nrows: int = len(self.filters)
         
         fig, axes = plt.subplots(
             nrows=nrows,
             sharex=True,
+            sharey=sharey,
             gridspec_kw={
                 'hspace': 0,
                 },
@@ -420,37 +459,61 @@ class Analyzer:
         if epoch_time is None:
             epoch_time = self.t_ref
         
-        folded_lcs = self.light_curves.fold(
-            period=period,
-            epoch_time=epoch_time,
-            normalize_phase=True,
-            )
+        folded_lcs = Table()
         
         for i, fltr in enumerate(self.filters):
             
             lc = get_lc(self.light_curves, fltr)
-            folded = lc.fold(
+            folded_lc = Table(lc.fold(
                 period=period,
-                epoch_time=epoch_time,
+                epoch_time=epoch_time - (period / 2),  # shift epoch time by half a period to account for 0.5 phase offset
                 normalize_phase=True,
-                )
+                ))
+            
+            if phase_bin:
+                folded_lc = rebin(
+                    method='mean',
+                    light_curves=folded_lc,
+                    nbins=nbins,
+                    )
+            
+            folded_lc.rename_column(name='time', new_name='phase')
+            folded_lcs = vstack([folded_lcs, folded_lc])
+            
+            # plot two periods for clarity
+            phase = np.append(0.5 + folded_lc['phase'].value, 1.5 + folded_lc['phase'].value)
+            flux = np.append(folded_lc[f'{fltr}_rel_flux'].value, folded_lc[f'{fltr}_rel_flux'].value)
+            flux_err = np.append(folded_lc[f'{fltr}_rel_flux_err'].value, folded_lc[f'{fltr}_rel_flux_err'].value)
             
             axes[i].errorbar(
-                np.append(0.5 + folded.time.value, 1.5 + folded.time.value),
-                np.append(folded[f'{fltr}_rel_flux'].value, folded[f'{fltr}_rel_flux'].value),
-                np.append(folded[f'{fltr}_rel_flux_err'].value, folded[f'{fltr}_rel_flux_err'].value),
-                fmt='k.',
+                phase,
+                flux,
+                flux_err,
+                color='black',
+                linestyle='none',
+                marker='.' if not phase_bin else 'none',
                 ms=2,
                 ecolor='grey',
                 elinewidth=1,
                 label=fltr,
                 )
             
-            axes[i].legend(
+            if phase_bin:
+                axes[i].step(
+                phase,
+                flux,
+                where='mid',
+                color='k',
+                lw=1,
+                )
+            
+            leg = axes[i].legend(
                 handlelength=0,
                 fontsize='x-large',
                 frameon=False,
-            )
+                )
+            for handle in leg.legend_handles:
+                handle.set_visible(False)
         
         axes[-1].set_xlabel('Phase')
         axes[nrows // 2].set_ylabel('Normalized flux')
@@ -463,6 +526,8 @@ class Analyzer:
         
         if self.show_plots:
             plt.show()
+        
+        folded_lcs = folded_lcs.group_by('phase').groups.aggregate(np.nanmax)
         
         if not return_fig:
             fig.clear()
@@ -502,9 +567,113 @@ class Analyzer:
 
 
 
-def aggregate_mean(col: MaskedColumn) -> Quantity | float:
+def rebin(
+    method: Literal['mean', 'sum'],
+    light_curves: Table | TimeSeries | QTable,
+    time_bin_size: Quantity | None = None,
+    nbins: int | None = None,
+    ) -> Table | TimeSeries | QTable:
+    """
+    Rebin an `astropy` `Table` or similar to a lower time resolution while propagating errors correctly.
     
-    if 'err' in col.name:
+    Parameters
+    ----------
+    method : Literal[&#39;mean&#39;, &#39;sum&#39;]
+        The rebinning method. 
+    light_curves : Table | TimeSeries | QTable
+        The light curves being rebinned.
+    time_bin_size : Quantity | None, optional
+        The time resolution of the binned light curve, by default `None`. If a value it passed, it must have units of
+        time.
+    nbins : int | None, optional
+        The desired number of light curve bins, by default `None`. This parameter does nothing if `time_bin_size` is
+        defined.
+    
+    Returns
+    -------
+    Table | TimeSeries | QTable
+        The rebinned light curve.
+    
+    Raises
+    ------
+    NotImplementedError
+        If the value passed to `method` is not recognised.
+    ValueError
+        If neither `time_bin_size` or `nbins` are defined.
+    """
+    
+    if method == 'mean':
+        aggregate_func = aggregate_mean
+    else:
+        raise NotImplementedError(f'[OPTICAM] Rebinning light curves using method="sum" is not supported yet. We apologise for the inconvenience.')
+    
+    if time_bin_size is not None:
+        binned_lcs: BinnedTimeSeries =  aggregate_downsample(
+            time_series=light_curves,
+            aggregate_func=aggregate_func,
+            time_bin_size=time_bin_size,
+            )
+        new_lcs = convert_binned_timeseries_to_timeseries(binned_lc=binned_lcs)
+    elif nbins is not None:
+        # if binning a light curve into a specified number of bins, convert the light curve to a Table to prevent time
+        # column issues
+        lc_table = Table(light_curves)
+        lc_table['bin'] = np.floor(lc_table['time'] * nbins).astype(int)
+        new_lcs = lc_table.group_by('bin').groups.aggregate(aggregate_func)
+        new_lcs.remove_column('bin')
+    else:
+        raise ValueError('[OPTICAM] Cannot rebin a light curve unless time_bin_size or nbins is defined.')
+    
+    return new_lcs
+
+
+def convert_binned_timeseries_to_timeseries(
+    binned_lc: BinnedTimeSeries,
+    ) -> TimeSeries:
+    """
+    Convert an `astropy.timeseries.BinnedTimeSeries` into an `astropy.timeseries.TimeSeries`.
+    
+    Parameters
+    ----------
+    binned_lc : BinnedTimeSeries
+        The binned light curve.
+    
+    Returns
+    -------
+    TimeSeries
+        The binned light curve as an `astropy.timeseries.TimeSeries`.
+    """
+    
+    # time values of new TimeSeries are in the middle of the bins
+    new_lc = TimeSeries(
+        time=binned_lc['time_bin_start'] + binned_lc['time_bin_size'] / 2,
+        )
+    for col in binned_lc.colnames:
+        if col not in ['time_bin_start', 'time_bin_end', 'time_bin_size']:
+            new_lc.add_column(binned_lc[col], name=col)
+    
+    return new_lc
+
+
+def aggregate_mean(
+    col: MaskedColumn,
+    ) -> Quantity | float:
+    """
+    Aggregate a column of values using the mean. If the column represents error values, then the propagated error
+    is returned.
+    
+    Parameters
+    ----------
+    col : MaskedColumn
+        The column values.
+    
+    Returns
+    -------
+    Quantity | float
+        The aggregated column values.
+    """
+    
+    if 'err' in str(col.name):
         valid = np.isfinite(col)
         n = valid.sum()
         
@@ -586,9 +755,9 @@ def get_norm_factor(
     if norm == 'none':
         return 1.
     elif norm == 'max':
-        return float(np.max(fluxes))
+        return float(np.nanmax(fluxes))
     elif norm == 'mean':
-        return float(np.mean(fluxes))
+        return float(np.nanmean(fluxes))
     else:
         raise ValueError(f'[OPTICAM] norm={norm} is not supported.')
 
@@ -638,81 +807,6 @@ def save_figure(
     print(f'[OPTICAM] Plot saved to {path}.')
 
 
-def match_light_curve_times(
-    lc1: Lightcurve,
-    lc2: Lightcurve,
-    ) -> Tuple[Lightcurve, Lightcurve]:
-    """
-    Match the time columns of two light curves.
-    
-    Parameters
-    ----------
-    lc1 : Lightcurve
-        The first light curve.
-    lc2 : Lightcurve
-        The second light curve.
-    
-    Returns
-    -------
-    Tuple[Lightcurve, Lightcurve]
-        The two light curves with matched time columns.
-    """
-    
-    # get intersecting GTIs
-    gti = intersect_gtis(lc1.gti, lc2.gti)
-    lc1_restricted = restrict_to_gti(lc1, gti)
-    lc2_restricted = restrict_to_gti(lc2, gti)
-    
-    # interpolate lc2 onto lc1's time grid
-    interp_counts = np.interp(
-        np.asarray(lc1_restricted.time),
-        np.asarray(lc2_restricted.time),
-        np.asarray(lc2_restricted.counts),
-    )
-    interp_err = np.interp(
-        np.asarray(lc1_restricted.time),
-        np.asarray(lc2_restricted.time),
-        np.asarray(lc2_restricted.counts_err),
-    )
-    lc2_interp = Lightcurve(
-        lc1_restricted.time,
-        interp_counts,
-        err=interp_err,
-        gti=gti,
-        err_dist=lc2_restricted.err_dist,
-    )
-    
-    return lc1_restricted, lc2_interp
-
-
-def intersect_gtis(gti1, gti2):
-
-    result = []
-    for start1, stop1 in gti1:
-        for start2, stop2 in gti2:
-            start = max(start1, start2)
-            stop = min(stop1, stop2)
-            if start < stop:
-                result.append([start, stop])
-    
-    return np.array(result)
-
-
-def restrict_to_gti(lc, gti):
-    
-    mask = np.zeros_like(lc.time, dtype=bool)
-    for start, stop in gti:
-        mask |= (lc.time >= start) & (lc.time <= stop)
-        
-    return Lightcurve(
-        lc.time[mask],
-        lc.counts[mask],
-        err=lc.counts_err[mask],
-        gti=gti,
-        err_dist=lc.err_dist,
-    )
-
-
 def convert_lc_to_stingray(
     lc: TimeSeries,
     fltr: str,
@@ -749,3 +843,6 @@ def convert_lc_to_stingray(
         gti=gti,
         err_dist='gauss',
         ).sort()
+
+
+
