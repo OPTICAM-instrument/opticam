@@ -11,7 +11,7 @@ from numpy.typing import NDArray
 import os.path
 
 
-from opticam.correctors import FlatFieldCorrector, DarkNoiseCorrector
+from opticam.correctors import BiasCorrector, DarkNoiseCorrector, FlatFieldCorrector
 from opticam.utils.image_helpers import rebin_image
 from opticam.utils.time_helpers import apply_barycentric_correction
 from opticam.instruments import Instrument
@@ -67,10 +67,11 @@ def get_header_info(
 def get_data(
     file_path: Path,
     instrument: Instrument,
-    dark_corrector: DarkNoiseCorrector | None,
-    flat_corrector: FlatFieldCorrector | None,
     rebin_factor: int,
     remove_cosmic_rays: bool,
+    bias_corrector: BiasCorrector | None = None,
+    dark_corrector: DarkNoiseCorrector | None = None,
+    flat_corrector: FlatFieldCorrector | None = None,
     ) -> Tuple[NDArray[np.float64], float]:
     """
     Given the path to a FITS file, get the image data and perform and required corrections.
@@ -81,14 +82,16 @@ def get_data(
         The path to the FITS file.
     instrument : Instrument
         The instrument that produced the FITS file.
-    dark_corrector : DarkNoiseCorrector | None
-        The dark noise corrector. If `None`, no dark noise corrections are performed.
-    flat_corrector : FlatFieldCorrector | None
-        The flat-field corrector. If `None`, no flat-field corrections are performed.
     rebin_factor : int
         The image rebinning factor.
     remove_cosmic_rays : bool
         Whether to remove cosmic rays from the image.
+    bias_corrector : BiasCorrector | None, optional
+        The bias corrector, by default `None`. If `None`, no bias corrections are performed.
+    dark_corrector : DarkNoiseCorrector | None, optional
+        The dark noise corrector, by default `None`. If `None`, no dark noise corrections are performed.
+    flat_corrector : FlatFieldCorrector | None, optional
+        The flat-field corrector, by default `None`. If `None`, no flat-field corrections are performed.
     
     Returns
     -------
@@ -106,6 +109,18 @@ def get_data(
     
     fltr = instrument.get_filter(header=header)
     
+    # TODO: propagate correction errors
+    
+    ################################################# bias correction #################################################
+    
+    if bias_corrector is not None:
+        data = bias_corrector.correct(
+            image=data,
+            fltr=fltr,
+            )
+    
+    ############################################## dark noise correction ##############################################
+    
     if dark_corrector is not None:
         dark_flux: float | None = instrument.get_dark_flux(file_path)
         
@@ -114,6 +129,7 @@ def get_data(
                 data, dark_flux = dark_corrector.correct(
                     image=data,
                     fltr=fltr,
+                    bias_corrector=bias_corrector,
                     )
             except Exception as e:
                 raise ValueError(f'[OPTICAM] Could not apply dark current corrections to {file_path} due to the following exception: {e}.')
@@ -122,17 +138,24 @@ def get_data(
     else:
         dark_flux = 0.
     
+    ############################################## flat-field correction ##############################################
+    
     if flat_corrector is not None:
         try:
             data = flat_corrector.correct(
                 image=data,
                 fltr=fltr,
+                bias_corrector=bias_corrector,
                 )
         except Exception as e:
             raise ValueError(f'[OPTICAM] Could not apply flat-field corrections to {file_path} due to the following exception: {e}.')
     
+    ################################################# clip cosmic rays #################################################
+    
     if remove_cosmic_rays:
         data = np.asarray(cosmicray_lacosmic(data, gain_apply=False)[0])
+    
+    ###################################################### rebin ######################################################
     
     if rebin_factor > 1:
         data = rebin_image(data, rebin_factor)

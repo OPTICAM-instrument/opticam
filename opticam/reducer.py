@@ -21,7 +21,7 @@ from tqdm import tqdm
 
 from opticam.utils.transforms import find_translation
 from opticam.background.global_background import BaseBackground, DefaultBackground
-from opticam.correctors import FlatFieldCorrector, DarkNoiseCorrector
+from opticam.correctors import BiasCorrector, DarkNoiseCorrector, FlatFieldCorrector
 from opticam.finders import DefaultFinder, get_source_coords_from_image
 from opticam.instruments import Instrument, OPTICAM_MX
 from opticam.photometers import AperturePhotometer, BasePhotometer
@@ -47,18 +47,19 @@ class Reducer:
         self,
         out_directory: Path | str,
         data_directory: Path | str,
-        instrument: Instrument = OPTICAM_MX(),
-        rebin_factor: int = 1,
-        dark_corrector: DarkNoiseCorrector = DarkNoiseCorrector(),
-        flat_corrector: FlatFieldCorrector | None = None,
-        background: BaseBackground | None = None,
-        finder: None | Callable = None,
-        threshold: float = 5,
         aperture_selector: Callable = np.median,
-        remove_cosmic_rays: bool = False,
+        background: BaseBackground | None = None,
         barycenter: bool = True,
+        bias_corrector: BiasCorrector | None = None,
+        dark_corrector: DarkNoiseCorrector = DarkNoiseCorrector(),
+        finder: None | Callable = None,
+        flat_corrector: FlatFieldCorrector | None = None,
+        instrument: Instrument = OPTICAM_MX(),
         number_of_processors: int = cpu_count() // 2,
+        rebin_factor: int = 1,
+        remove_cosmic_rays: bool = False,
         show_plots: bool = True,
+        threshold: float = 5,
         verbose: bool = True
         ) -> None:
         """
@@ -70,44 +71,48 @@ class Reducer:
             The path to the directory to save the output files.
         data_directory : Path | str
             The path to the directory containing the data.
-        instrument : Instrument, optional
-            The instrument, by default `OPTICAM_MX()`.
-        rebin_factor: int, optional
-            The rebinning factor, by default 1 (no rebinning). The rebinning factor is the factor by which the image is
-            rebinned in both dimensions. Rebinning can improve the detectability of faint sources and speed up
-            some operations (like cosmic ray removal) at the cost of image resolution.
-        dark_corrector : DarkNoiseCorrector, optional,
-            The dark noise corrector, by default `DarkNoiseCorrector()`. To perform dark current corrections using
-            dark images, a custom `DarkNoiseCorrector` instance must be passed. See (TODO: link to corrections docs)
-            for more details.
-        flat_corrector : FlatFieldCorrector | None, optional,
-            The flat-field corrector, by default `None`. If `None`, no flat-field corrections are performed. See 
-            (TODO: link to corrections docs) for more details.
-        threshold : float, optional
-            The signal-to-noise ratio threshold for source finding, by default 5. Reduce this value to identify fainter
-            sources, though this may lead to the identification of spurious sources.
-        background : BaseBackground | None, optional
-            The background calculator, by default `None`. If `None`, the default background calculator is used. If a
-            callable is provided, it should take an image (`NDArray`) as input and return a `Background2D` object.
-        finder : Callable, optional
-            The source finder, by default `None`. If `None`, the default source finder is used. If a callable is
-            provided, it should take an image (`NDArray`) and a threshold (`float | NDArray`) as input and return a
-            `QTable` instance.
         aperture_selector : Callable, optional
             The aperture selector, by default `np.median`. This function is used to select the aperture size for
             photometry. If a callable is provided, it should take a list of source sizes (`List[float]`) as input and
             return a single value.
-        remove_cosmic_rays : bool, optional
-            Whether to remove cosmic rays from images, by default False. Cosmic rays are removed using the LACosmic
-            algorithm as implemented in `astroscrappy`. Note: this can be computationally expensive, particularly for
-            large images.
+        background : BaseBackground | None, optional
+            The background calculator, by default `None`. If `None`, the default background calculator is used. If a
+            callable is provided, it should take an image (`NDArray`) as input and return a `Background2D` object.
         barycenter : bool, optional
-            Whether to apply a barycentric correction to the image time stamps, by default True.
+            Whether to apply a barycentric correction to the image timestamps, by default `True`.
+        bias_corrector : BiasCorrector | None, optional
+            The bias corrector, by default `None`. If `None`, no bias corrections are performed. See 
+            (TODO: link to corrections docs) for more details.
+        dark_corrector : DarkNoiseCorrector, optional,
+            The dark noise corrector, by default `DarkNoiseCorrector()`. To perform dark current corrections using
+            dark images, a custom `DarkNoiseCorrector` instance must be passed. See (TODO: link to corrections docs)
+            for more details.
+        finder : Callable, optional
+            The source finder, by default `None`. If `None`, the default source finder is used. If a callable is
+            provided, it should take an image (`NDArray`) and a threshold (`float | NDArray`) as input and return a
+            `QTable` instance. See (TODO: link to finders docs) for details.
+        flat_corrector : FlatFieldCorrector | None, optional,
+            The flat-field corrector, by default `None`. If `None`, no flat-field corrections are performed. See 
+            (TODO: link to corrections docs) for more details.
+        instrument : Instrument, optional
+            The instrument, by default `OPTICAM_MX()`. To use a custom instrument, see (TODO: link to instruments docs)
+            for details.
         number_of_processors : int, optional
             The number of processors to use for parallel processing, by default half the number of available processors.
+        rebin_factor: int, optional
+            The rebinning factor, by default 1 (no rebinning). The rebinning factor is the factor by which the image is
+            rebinned in both dimensions. Rebinning can improve the detectability of faint sources and speed up
+            some operations (like cosmic ray removal) at the cost of image resolution.
+        remove_cosmic_rays : bool, optional
+            Whether to remove cosmic rays from images, by default `False`. Cosmic rays are removed using the LACosmic
+            algorithm as implemented in `astroscrappy`. Note: this can be computationally expensive, particularly for
+            large images.
         show_plots : bool, optional
             Whether to show plots as they're created, by default `True`. Whether `True` or `False`, plots are always
             saved to `out_directory`.
+        threshold : float, optional
+            The signal-to-noise ratio threshold for source finding, by default 5. Reduce this value to identify fainter
+            sources, though this may lead to the identification of spurious sources.
         verbose : bool, optional
             Whether to print verbose output, by default `True`.
         """
@@ -189,9 +194,23 @@ class Reducer:
         
         ########################################### correctors ###########################################
         
+        self.bias_corrector = bias_corrector
+        if self.bias_corrector is not None:
+            errors = self.bias_corrector.run_checks(
+                data_file_paths_by_filter=self.camera_files,
+                return_errors=True,
+                )
+            if errors == 1:
+                raise ValueError(f'[OPTICAM] {errors} BiasCorrector error needs to be resolved.')
+            elif errors > 1:
+                raise ValueError(f'[OPTICAM] {errors} BiasCorrector errors need to be resolved.')
+        
         self.dark_corrector = dark_corrector
         if self.dark_corrector is not None:
-            errors = self.dark_corrector.run_checks(self.camera_files, return_errors=True)
+            errors = self.dark_corrector.run_checks(
+                data_file_paths_by_filter=self.camera_files,
+                return_errors=True,
+                )
             if errors == 1:
                 raise ValueError(f'[OPTICAM] {errors} DarkNoiseCorrector error needs to be resolved.')
             elif errors > 1:
@@ -199,7 +218,10 @@ class Reducer:
         
         self.flat_corrector = flat_corrector
         if self.flat_corrector is not None:
-            errors = self.flat_corrector.run_checks(self.camera_files, return_errors=True)
+            errors = self.flat_corrector.run_checks(
+                data_file_paths_by_filter=self.camera_files,
+                return_errors=True,
+                )
             if errors == 1:
                 raise ValueError(f'[OPTICAM] {errors} FlatFieldCorrector error needs to be resolved.')
             elif errors > 1:
@@ -385,6 +407,7 @@ class Reducer:
             reference_image = get_data(
                 file_path=self.reference_files[fltr],
                 instrument=self.instrument,
+                bias_corrector=self.bias_corrector,
                 dark_corrector=self.dark_corrector,
                 flat_corrector=self.flat_corrector,
                 rebin_factor=self.rebin_factor,
@@ -573,6 +596,7 @@ class Reducer:
             data = get_data(
                 file_path=file_path,
                 instrument=self.instrument,
+                bias_corrector=self.bias_corrector,
                 dark_corrector=self.dark_corrector,
                 flat_corrector=self.flat_corrector,
                 rebin_factor=self.rebin_factor,
@@ -996,6 +1020,7 @@ class Reducer:
             img = get_data(
                 file_path=self.reference_files[fltr],
                 instrument=self.instrument,
+                bias_corrector=self.bias_corrector,
                 dark_corrector=self.dark_corrector,
                 flat_corrector=self.flat_corrector,
                 rebin_factor=self.rebin_factor,
@@ -1115,6 +1140,7 @@ class Reducer:
         image, dark_flux = get_data(
             file_path=file_path,
             instrument=self.instrument,
+            bias_corrector=self.bias_corrector,
             dark_corrector=self.dark_corrector,
             flat_corrector=self.flat_corrector,
             rebin_factor=self.rebin_factor,
@@ -1448,8 +1474,6 @@ def get_random_image_for_each_filter(
         images[file_name] = get_data(
             file_path=Path(file_path),
             instrument=instrument,
-            dark_corrector=None,
-            flat_corrector=None,
             rebin_factor=1,
             remove_cosmic_rays=False,
             )[0]

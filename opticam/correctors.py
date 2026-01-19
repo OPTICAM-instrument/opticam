@@ -115,12 +115,16 @@ class Corrector(ABC):
     def create_master_images(
         self,
         overwrite: bool = False,
+        *args,
+        **kwargs,
         ) -> None:
         """
         Create the master calibration image(s).
         
         Parameters
         ----------
+        bias_corrector : BiasCorrector | None, optional
+            The bias corrector, by default `None` (no bias corrections).
         overwrite : bool, optional
             Whether to overwrite any existing master calibration images, by default `False`.
         """
@@ -223,24 +227,24 @@ class Corrector(ABC):
 
 
 
-class FlatFieldCorrector(Corrector):
+class BiasCorrector(Corrector):
     """
-    Helper class for performing flat-field corrections.
+    Helper clsas for performing bias corrections.
     """
 
 
     @property
     def master_image_path(self) -> Path | None:
         """
-        The path to the master flat.
+        The path to the master calibration image.
         
         Returns
         -------
         Path
-            The path to the master flat.
+            The path to the master calibration image.
         """
         
-        return self.out_directory.joinpath('master_flats.fits.gz') if self.out_directory is not None else None
+        return self.out_directory.joinpath('master_bias.fits.gz') if self.out_directory is not None else None
 
 
     def correct(
@@ -249,7 +253,7 @@ class FlatFieldCorrector(Corrector):
         fltr: str,
         ) -> NDArray[np.float64]:
         """
-        Correct an image for flat-fielding.
+        Subtract the bias from an image.
         
         Parameters
         ----------
@@ -262,20 +266,20 @@ class FlatFieldCorrector(Corrector):
         -------
         NDArray[np.float64]
             The corrected image.
+        
+        Raises
+        ------
+        ValueError
+            If no bias images were found with the given filter.
         """
         
         if fltr not in self.data_paths.keys():
-            raise ValueError(f"[OPTICAM] Cannot apply flat-field corrections. No flat-field images found for filter: {fltr}.")
+            raise ValueError(f"[OPTICAM] No bias images found for {fltr} filter.")
+        if fltr not in self.master_images.keys() or self.master_images[fltr] is None:
+            print(f'[OPTICAM] {fltr} master bias image not found. Attempting to create.')
+            self.create_master_images()
         
-        if fltr not in self.master_images.keys():
-            print(f'[OPTICAM] {fltr} master flat-field image not found. Attempting to create.')
-            try:
-                self.create_master_images()
-            except Exception as e:
-                raise Exception(f"[OPTICAM] Could not create master flat-field image(s) due to the following exception: {e}.")
-        
-        # correct image for flat-fielding
-        return image / self.master_images[fltr]
+        return image - self.master_images[fltr]
 
 
     def create_master_images(
@@ -283,43 +287,42 @@ class FlatFieldCorrector(Corrector):
         overwrite: bool = False,
         ) -> None:
         """
-        Create master flat-field images for each filter.
+        Create master bias images for each filter.
         
         Parameters
         ----------
         overwrite : bool, optional
-            Whether to overwrite the existing master flat-field image, by default `False`.
+            Whether to overwrite the existing master bias image, by default `False`.
         """
         
         if self.master_image_path.is_file() and not overwrite:
-            print(f'[OPTICAM] Master flats file already exists. To overwrite existing flats, set overwrite=True.')
+            print(f'[OPTICAM] Master bias file already exists. To overwrite, set overwrite=True.')
             return
         
         for fltr in self.data_paths.keys():
             
             if len(self.data_paths[fltr]) == 1:
-                raise Exception(f"[OPTICAM] Only one {fltr} flat found. Master flats cannot be created from a single image.")
+                raise Exception(f"[OPTICAM] Only one {fltr} bias image found. Master bias images cannot be created from a single image.")
             
-            # read flats
-            flats = []
-            for flat_path in self.data_paths[fltr]:
-                with fits.open(flat_path) as hdul:
-                    flat = np.array(hdul[0].data, dtype=np.float64)
+            biases = []
+            for bias_path in self.data_paths[fltr]:
+                with fits.open(bias_path) as hdul:
+                    bias = np.array(hdul[0].data, dtype=np.float64)
                 
                 if self.rebin_factor > 1:
-                    flat = rebin_image(flat, self.rebin_factor)
+                    bias = rebin_image(bias, self.rebin_factor)
                 
-                flats.append(flat / np.median(flat))  # add normalised flat-field image to list
+                biases.append(bias)
             
-            # create master flat
-            master_flat = np.median(flats, axis=0)
+            # create master bias image
+            master_bias = np.median(biases, axis=0)
             
-            # hold master flat in memory (faster than having to read it from disk every time correct() is called)
-            self.master_images[fltr] = master_flat
+            # hold master bias in memory (faster than having to read it from disk every time correct() is called)
+            self.master_images[fltr] = master_bias
         
         self._save_master_image(overwrite=overwrite)
         
-        print(f'[OPTICAM] Master flat-field image(s) saved to {self.master_image_path}.')
+        print(f'[OPTICAM] Master bias image(s) saved to {self.master_image_path}.')
 
 
     def run_checks(
@@ -329,8 +332,8 @@ class FlatFieldCorrector(Corrector):
         ) -> None | int:
         """
         Run a series of checks on the corrector to ensure that it is compatible with the data. In this case, check the
-        binning of the science images can be matched to those of the flats (accounting for self.rebin_factor), and that
-        the there are no missing filters.
+        binning of the science images matches those of the bias images (ignoring self.rebin_factor) and that there are
+        no missing filters.
         
         Parameters
         ----------
@@ -345,6 +348,11 @@ class FlatFieldCorrector(Corrector):
             If `return_errors=True`, the number of errors raised is returned. Otherwise, nothing is returned.
         """
         
+        bias_path = next(iter(self.data_paths.values()))[0]  # get the path to a random flat
+        bias_header = fits.getheader(bias_path)
+        image_path = next(iter(data_file_paths_by_filter.values()))[0]  # get the path to a science image
+        science_header = fits.getheader(image_path)
+        
         errors = 0
         warnings = 0
         
@@ -353,18 +361,16 @@ class FlatFieldCorrector(Corrector):
         # check filters match
         if self.data_paths.keys() != data_file_paths_by_filter.keys():
             errors += 1
-            print(f'[OPTICAM] ERROR: inconsistent filters found between the flat-field images and the science images. Flat-field image filters: ({','.join(self.data_paths.keys())}); science image filters: ({','.join(data_file_paths_by_filter.keys())})')
+            print(f'[OPTICAM] ERROR: inconsistent filters found between the bias images and the science images. Bias image filters: ({','.join(self.data_paths.keys())}); science image filters: ({','.join(data_file_paths_by_filter.keys())})')
         
         ################################################### warnings ###################################################
         
         # check binnings match
-        flat_path = next(iter(self.data_paths.values()))[0]  # get the path to a random flat
-        flat_binning = self.instrument.get_binning(file_path=flat_path)
-        image_path = next(iter(data_file_paths_by_filter.values()))[0]  # get the path to a science image
-        science_binning = self.instrument.get_binning(file_path=image_path)
-        if flat_binning != science_binning:
+        bias_binning = self.instrument.get_binning(header=bias_header)
+        science_binning = self.instrument.get_binning(header=science_header)
+        if bias_binning != science_binning:
             warnings += 1
-            print(f'[OPTICAM] WARNING: inconsistent binning found between the flat-field images and the science images. Flat-field image binning: {flat_binning}; science image binning: {science_binning}. If you have passed a suitable rebin_factor to your FlatFieldCorrector instance, then you can safely ignore this warning.')
+            print(f'[OPTICAM] WARNING: inconsistent binning found between the bias images and the science images. Bias image binning: {bias_binning}; science image binning: {science_binning}. If you have passed a suitable rebin_factor to your BiasCorrector instance, then you can safely ignore this warning.')
         
         ################################################### summary ###################################################
         
@@ -372,17 +378,17 @@ class FlatFieldCorrector(Corrector):
             print()  # blank line for readibility
         
         if errors == 0:
-            print(f'[OPTICAM] FlatFieldCorrector sucessfully passed all checks.')
+            print(f'[OPTICAM] BiasCorrector sucessfully passed all checks.')
         else:
             if errors == 1:
-                print('[OPTICAM] FlatFieldCorrector failed 1 check.')
+                print('[OPTICAM] BiasCorrector failed 1 check.')
             else:
-                print(f'[OPTICAM] FlatFieldCorrector failed {errors} checks.')
+                print(f'[OPTICAM] BiasCorrector failed {errors} checks.')
         
         if warnings == 1:
-            print('[OPTICAM] FlatFieldCorrector triggered a warning during 1 check. Warnings may be ignored provided their caveats are satisfied.')
+            print('[OPTICAM] BiasCorrector triggered a warning during 1 check. Warnings may be ignored provided their caveats are satisfied.')
         elif warnings > 1:
-            print(f'[OPTICAM] FlatFieldCorrector triggered a warning during {warnings} checks. Warnings may be ignored provided their caveats are satisfied.')
+            print(f'[OPTICAM] BiasCorrector triggered a warning during {warnings} checks. Warnings may be ignored provided their caveats are satisfied.')
         
         if return_errors:
             return errors
@@ -393,7 +399,7 @@ class FlatFieldCorrector(Corrector):
         overwrite: bool,
         ) -> None:
         """
-        Save the master flat(s) to a compressed FITS cube.
+        Save the bias images to a compressed FITS cube.
         
         Parameters
         ----------
@@ -402,7 +408,7 @@ class FlatFieldCorrector(Corrector):
         """
         
         hdr = fits.Header()
-        hdr['COMMENT'] = 'This FITS file contains master flat-field images for each filter.'
+        hdr['COMMENT'] = 'This FITS file contains master bias images for each filter.'
         empty_primary = fits.PrimaryHDU(header=hdr)
         hdul = fits.HDUList([empty_primary])
         
@@ -422,28 +428,34 @@ class FlatFieldCorrector(Corrector):
         file_paths: List[Path],
         ) -> Dict[str, List[Path]]:
         """
-        Ensure that the flat-field images in the specified directory are valid (i.e., all use the same binning).
+        Ensure that the bias images in the specified directory are valid (i.e., all use the same binning and have 
+        exposure times of 0 s).
         
         Parameters
         ----------
         file_paths : List[Path]
-            The paths to the flat-field images.
+            The paths to the bias images.
         
         Returns
         -------
         Dict[str, List[Path]]
-            A dictionary containing the paths to the flat-field images for each filter.
+            A dictionary containing the paths to the bias images for each filter.
         """
         
-        filters, binnings = {}, {}
+        filters: Dict[Path, str] = {}
+        binnings: Dict[Path, str] = {}
+        exptimes: Dict[Path, float] = {}
         
         for file_path in file_paths:
             header = fits.getheader(file_path)
             filters[file_path] = self.instrument.get_filter(header=header)
             binnings[file_path] = self.instrument.get_binning(header=header)
+            exptimes[file_path] = float(header[self.instrument.exptime_kw])
         
         unique_filters = set(filters.values())
         unique_binnings = set(binnings.values())
+        unique_exptimes = set(exptimes.values())
+        zero_second_exposures = all([exptime == 0.0 for exptime in list(unique_exptimes)])
         
         if len(unique_binnings) > 1:
             log_file(
@@ -451,20 +463,29 @@ class FlatFieldCorrector(Corrector):
                 file_name='binnings.json',
                 file_contents=binnings,
                 )
-            raise ValueError(f'[OPTICAM] Inconsistent binning detected in the flat-field images. Image binnings have been logged to {self.out_directory.joinpath('diag/binnings.json')}')
+            raise ValueError(f'[OPTICAM] Inconsistent binning detected in the bias images. Image binnings have been logged to {self.out_directory.joinpath('diag/binnings.json')}.')
+        
+        if len(unique_exptimes) > 1 or not zero_second_exposures:
+            log_file(
+                out_directory=self.out_directory,
+                file_name='exptimes.json',
+                file_contents=exptimes,
+                )
+            raise ValueError(f'[OPTICAM] Invalid exposure times detected in the bias images. Exposure times have been logged to {self.out_directory.joinpath('diag/exptimes.json')}. All bias images should have an exposure time of 0.0 s.')
         
         # get flats for each filter
-        flats = {}
+        biases = {}
         for fltr in unique_filters:
-            flats[fltr] = []
+            biases[fltr] = []
             for k, v in filters.items():
                 if v == fltr:
-                    flats[fltr].append(k)
+                    biases[fltr].append(k)
         
-        for k, v in flats.items():
-            print(f'[OPTICAM] {len(v)} {k} flat-field images.')
+        for k, v in biases.items():
+            print(f'[OPTICAM] {len(v)} {k} bias images.')
         
-        return flats
+        return biases
+
 
 
 
@@ -512,6 +533,7 @@ class DarkNoiseCorrector(Corrector):
         self,
         image: NDArray[np.float64],
         fltr: str,
+        bias_corrector: BiasCorrector | None = None,
         dark_flux: float | None = None,
         ) -> NDArray[np.float64] | Tuple[NDArray[np.float64], float]:
         """
@@ -523,6 +545,8 @@ class DarkNoiseCorrector(Corrector):
             The image.
         fltr : str
             The image filter.
+        bias_corrector : BiasCorrector | None, optional
+            The bias corrector, by default `None` (no bias corrections).
         dark_flux : float | None, optional
             The exposure-integrated dark current, by default `None`. If the instrument provides a measure of the dark
             current in the image header, this obviates the need for master darks.
@@ -544,7 +568,9 @@ class DarkNoiseCorrector(Corrector):
                 raise ValueError(f"[OPTICAM] No dark images found for {fltr} filter.")
             if fltr not in self.master_images.keys() or self.master_images[fltr] is None:
                 print(f'[OPTICAM] {fltr} master dark image not found. Attempting to create.')
-                self.create_master_images()
+                self.create_master_images(
+                    bias_corrector=bias_corrector,
+                    )
             
             return image - self.master_images[fltr], self.median_dark_fluxes[fltr]
         else:
@@ -553,6 +579,7 @@ class DarkNoiseCorrector(Corrector):
 
     def create_master_images(
         self,
+        bias_corrector: BiasCorrector | None = None,
         overwrite: bool = False,
         ) -> None:
         """
@@ -578,6 +605,14 @@ class DarkNoiseCorrector(Corrector):
             for dark_path in self.data_paths[fltr]:
                 with fits.open(dark_path) as hdul:
                     dark = np.array(hdul[0].data, dtype=np.float64)
+                
+                # apply bias correction
+                # TODO: check whether bias should be applied after rebinning instead
+                if bias_corrector is not None:
+                    dark = bias_corrector.correct(
+                        image=dark,
+                        fltr=fltr,
+                        )
                 
                 if self.rebin_factor > 1:
                     dark = rebin_image(dark, self.rebin_factor)
@@ -773,6 +808,262 @@ class DarkNoiseCorrector(Corrector):
         
         return darks
 
+
+
+
+
+class FlatFieldCorrector(Corrector):
+    """
+    Helper class for performing flat-field corrections.
+    """
+
+
+    @property
+    def master_image_path(self) -> Path | None:
+        """
+        The path to the master flat.
+        
+        Returns
+        -------
+        Path
+            The path to the master flat.
+        """
+        
+        return self.out_directory.joinpath('master_flats.fits.gz') if self.out_directory is not None else None
+
+
+    def correct(
+        self,
+        image: NDArray[np.float64],
+        fltr: str,
+        bias_corrector : BiasCorrector | None = None,
+        ) -> NDArray[np.float64]:
+        """
+        Correct an image for flat-fielding.
+        
+        Parameters
+        ----------
+        image : NDArray[np.float64]
+            The image.
+        fltr : str
+            The image filter.
+        
+        Returns
+        -------
+        NDArray[np.float64]
+            The corrected image.
+        """
+        
+        if fltr not in self.data_paths.keys():
+            raise ValueError(f"[OPTICAM] Cannot apply flat-field corrections. No flat-field images found for filter: {fltr}.")
+        
+        if fltr not in self.master_images.keys():
+            print(f'[OPTICAM] {fltr} master flat-field image not found. Attempting to create.')
+            try:
+                self.create_master_images(
+                    bias_corrector=bias_corrector,
+                    )
+            except Exception as e:
+                raise Exception(f"[OPTICAM] Could not create master flat-field image(s) due to the following exception: {e}.")
+        
+        # correct image for flat-fielding
+        return image / self.master_images[fltr]
+
+
+    def create_master_images(
+        self,
+        bias_corrector: BiasCorrector | None = None,
+        overwrite: bool = False,
+        ) -> None:
+        """
+        Create master flat-field images for each filter.
+        
+        Parameters
+        ----------
+        overwrite : bool, optional
+            Whether to overwrite the existing master flat-field image, by default `False`.
+        """
+        
+        if self.master_image_path.is_file() and not overwrite:
+            print(f'[OPTICAM] Master flats file already exists. To overwrite existing flats, set overwrite=True.')
+            return
+        
+        for fltr in self.data_paths.keys():
+            
+            if len(self.data_paths[fltr]) == 1:
+                raise Exception(f"[OPTICAM] Only one {fltr} flat found. Master flats cannot be created from a single image.")
+            
+            # read flats
+            flats = []
+            for flat_path in self.data_paths[fltr]:
+                with fits.open(flat_path) as hdul:
+                    flat = np.array(hdul[0].data, dtype=np.float64)
+                
+                if bias_corrector is not None:
+                    flat = bias_corrector.correct(
+                        image=flat,
+                        fltr=fltr,
+                        )
+                
+                if self.rebin_factor > 1:
+                    flat = rebin_image(flat, self.rebin_factor)
+                
+                flats.append(flat / np.median(flat))  # add normalised flat-field image to list
+            
+            # create master flat
+            master_flat = np.median(flats, axis=0)
+            
+            # hold master flat in memory (faster than having to read it from disk every time correct() is called)
+            self.master_images[fltr] = master_flat
+        
+        self._save_master_image(overwrite=overwrite)
+        
+        print(f'[OPTICAM] Master flat-field image(s) saved to {self.master_image_path}.')
+
+
+    def run_checks(
+        self,
+        data_file_paths_by_filter: Dict[str, List[Path]],
+        return_errors: bool = False,
+        ) -> None | int:
+        """
+        Run a series of checks on the corrector to ensure that it is compatible with the data. In this case, check the
+        binning of the science images can be matched to those of the flats (accounting for self.rebin_factor), and that
+        the there are no missing filters.
+        
+        Parameters
+        ----------
+        data_file_paths_by_filter : Dict[str, List[Path]]
+            The paths to all of the science images grouped by filter {filter: list of paths}.
+        return_errors : bool, optional
+            Whether to return the number of errors raised, by default `False`.
+        
+        Returns
+        -------
+        None | int
+            If `return_errors=True`, the number of errors raised is returned. Otherwise, nothing is returned.
+        """
+        
+        errors = 0
+        warnings = 0
+        
+        #################################################### errors ####################################################
+        
+        # check filters match
+        if self.data_paths.keys() != data_file_paths_by_filter.keys():
+            errors += 1
+            print(f'[OPTICAM] ERROR: inconsistent filters found between the flat-field images and the science images. Flat-field image filters: ({','.join(self.data_paths.keys())}); science image filters: ({','.join(data_file_paths_by_filter.keys())})')
+        
+        ################################################### warnings ###################################################
+        
+        # check binnings match
+        flat_path = next(iter(self.data_paths.values()))[0]  # get the path to a random flat
+        flat_binning = self.instrument.get_binning(file_path=flat_path)
+        image_path = next(iter(data_file_paths_by_filter.values()))[0]  # get the path to a science image
+        science_binning = self.instrument.get_binning(file_path=image_path)
+        if flat_binning != science_binning:
+            warnings += 1
+            print(f'[OPTICAM] WARNING: inconsistent binning found between the flat-field images and the science images. Flat-field image binning: {flat_binning}; science image binning: {science_binning}. If you have passed a suitable rebin_factor to your FlatFieldCorrector instance, then you can safely ignore this warning.')
+        
+        ################################################### summary ###################################################
+        
+        if errors > 0 or warnings > 0:
+            print()  # blank line for readibility
+        
+        if errors == 0:
+            print(f'[OPTICAM] FlatFieldCorrector sucessfully passed all checks.')
+        else:
+            if errors == 1:
+                print('[OPTICAM] FlatFieldCorrector failed 1 check.')
+            else:
+                print(f'[OPTICAM] FlatFieldCorrector failed {errors} checks.')
+        
+        if warnings == 1:
+            print('[OPTICAM] FlatFieldCorrector triggered a warning during 1 check. Warnings may be ignored provided their caveats are satisfied.')
+        elif warnings > 1:
+            print(f'[OPTICAM] FlatFieldCorrector triggered a warning during {warnings} checks. Warnings may be ignored provided their caveats are satisfied.')
+        
+        if return_errors:
+            return errors
+
+
+    def _save_master_image(
+        self,
+        overwrite: bool,
+        ) -> None:
+        """
+        Save the master flat(s) to a compressed FITS cube.
+        
+        Parameters
+        ----------
+        overwrite : bool
+            Whether to overwrite existing master flats.
+        """
+        
+        hdr = fits.Header()
+        hdr['COMMENT'] = 'This FITS file contains master flat-field images for each filter.'
+        empty_primary = fits.PrimaryHDU(header=hdr)
+        hdul = fits.HDUList([empty_primary])
+        
+        for fltr, img in self.master_images.items():
+            hdr = fits.Header()
+            # filter is already in instrument format so no need to use instrument.get_filter()
+            hdr[self.instrument.filter_kw] = fltr
+            hdu = fits.ImageHDU(img, hdr)
+            hdul.append(hdu)
+        
+        if not self.master_image_path.is_file() or overwrite:
+            hdul.writeto(self.master_image_path, overwrite=overwrite)
+
+
+    def _validate_data(
+        self,
+        file_paths: List[Path],
+        ) -> Dict[str, List[Path]]:
+        """
+        Ensure that the flat-field images in the specified directory are valid (i.e., all use the same binning).
+        
+        Parameters
+        ----------
+        file_paths : List[Path]
+            The paths to the flat-field images.
+        
+        Returns
+        -------
+        Dict[str, List[Path]]
+            A dictionary containing the paths to the flat-field images for each filter.
+        """
+        
+        filters, binnings = {}, {}
+        
+        for file_path in file_paths:
+            header = fits.getheader(file_path)
+            filters[file_path] = self.instrument.get_filter(header=header)
+            binnings[file_path] = self.instrument.get_binning(header=header)
+        
+        unique_filters = set(filters.values())
+        unique_binnings = set(binnings.values())
+        
+        if len(unique_binnings) > 1:
+            log_file(
+                out_directory=self.out_directory,
+                file_name='binnings.json',
+                file_contents=binnings,
+                )
+            raise ValueError(f'[OPTICAM] Inconsistent binning detected in the flat-field images. Image binnings have been logged to {self.out_directory.joinpath('diag/binnings.json')}')
+        
+        # get flats for each filter
+        flats = {}
+        for fltr in unique_filters:
+            flats[fltr] = []
+            for k, v in filters.items():
+                if v == fltr:
+                    flats[fltr].append(k)
+        
+        for k, v in flats.items():
+            print(f'[OPTICAM] {len(v)} {k} flat-field images.')
+        
+        return flats
 
 
 

@@ -2,7 +2,7 @@ from opticam.analyzer import Analyzer
 from opticam.differential_photometer import DifferentialPhotometer
 from opticam.background.global_background import BaseBackground, DefaultBackground
 from opticam.background.local_background import BaseLocalBackground, DefaultLocalBackground
-from opticam.correctors import DarkNoiseCorrector, FlatFieldCorrector
+from opticam.correctors import BiasCorrector, DarkNoiseCorrector, FlatFieldCorrector
 from opticam.finders import DefaultFinder
 from opticam.instruments import generate_instrument_json_template, Instrument, OPTICAM_MX, OPTICAM_MX_2022
 from opticam.photometers import AperturePhotometer, OptimalPhotometer
