@@ -72,7 +72,8 @@ def get_data(
     bias_corrector: BiasCorrector | None = None,
     dark_corrector: DarkNoiseCorrector | None = None,
     flat_corrector: FlatFieldCorrector | None = None,
-    ) -> Tuple[NDArray[np.float64], float]:
+    ) -> Tuple[NDArray[np.float64], float | NDArray[np.float64], float | NDArray[np.float64],
+               float | NDArray[np.float64]]:
     """
     Given the path to a FITS file, get the image data and perform and required corrections.
     
@@ -95,9 +96,9 @@ def get_data(
     
     Returns
     -------
-    Tuple[NDArray[np.float64], float]
-        The corrected image data and the dark noise contribution. If `dark_corrector` is `None`, the dark noise
-        contribution is set to zero.
+    Tuple[NDArray[np.float64], float | NDArray[np.float64], float | NDArray[np.float64], float | NDArray[np.float64]]
+        The corrected image and the master bias, dark, and flat variances. If any of the correctors are undefined,
+        the variance of that corrector is set to 0.
     """
     
     try:
@@ -109,46 +110,38 @@ def get_data(
     
     fltr = instrument.get_filter(header=header)
     
-    # TODO: propagate correction errors
-    
     ################################################# bias correction #################################################
     
     if bias_corrector is not None:
-        data = bias_corrector.correct(
+        data, bias_var = bias_corrector.correct(
             image=data,
             fltr=fltr,
             )
+    else:
+        bias_var = 0.
     
     ############################################## dark noise correction ##############################################
     
     if dark_corrector is not None:
-        dark_flux: float | None = instrument.get_dark_flux(file_path)
-        
-        if dark_flux is None:
-            try:
-                data, dark_flux = dark_corrector.correct(
-                    image=data,
-                    fltr=fltr,
-                    bias_corrector=bias_corrector,
-                    )
-            except Exception as e:
-                raise ValueError(f'[OPTICAM] Could not apply dark current corrections to {file_path} due to the following exception: {e}.')
-        else:
-            data -= dark_flux
+        data, dark_var = dark_corrector.correct(
+            image=data,
+            fltr=fltr,
+            bias_corrector=bias_corrector,
+            dark_flux=instrument.get_dark_flux(file_path),
+            )
     else:
-        dark_flux = 0.
+        dark_var = 0.
     
     ############################################## flat-field correction ##############################################
     
     if flat_corrector is not None:
-        try:
-            data = flat_corrector.correct(
-                image=data,
-                fltr=fltr,
-                bias_corrector=bias_corrector,
-                )
-        except Exception as e:
-            raise ValueError(f'[OPTICAM] Could not apply flat-field corrections to {file_path} due to the following exception: {e}.')
+        data, flat_var = flat_corrector.correct(
+            image=data,
+            fltr=fltr,
+            bias_corrector=bias_corrector,
+            )
+    else:
+        flat_var = 0.
     
     ################################################# clip cosmic rays #################################################
     
@@ -160,7 +153,7 @@ def get_data(
     if rebin_factor > 1:
         data = rebin_image(data, rebin_factor)
     
-    return data, dark_flux
+    return data, bias_var, dark_var, flat_var
 
 
 def save_stacked_images(

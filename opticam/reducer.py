@@ -1137,7 +1137,7 @@ class Reducer:
             The photometry results.
         """
         
-        image, dark_flux = get_data(
+        image, bias_var, dark_var, flat_var = get_data(
             file_path=file_path,
             instrument=self.instrument,
             bias_corrector=self.bias_corrector,
@@ -1149,7 +1149,7 @@ class Reducer:
         
         if photometer.local_background_estimator is None:
             bkg = self.background(image)  # get 2D background
-            image = image - bkg.background  # remove background from image
+            image -= bkg.background  # remove background from image
             threshold = self.threshold * bkg.background_rms  # define source detection threshold
             background_rms = bkg.background_rms.copy()
         else:
@@ -1169,7 +1169,9 @@ class Reducer:
         
         results = photometer.compute(
             image=image,
-            dark_flux=dark_flux,
+            bias_var=bias_var,
+            dark_var=dark_var,
+            flat_var=flat_var,
             background_rms=background_rms,
             source_coords=source_coords,
             image_coords=image_coords,

@@ -56,18 +56,20 @@ class Corrector(ABC):
             if not self.out_directory.is_dir():
                 self.out_directory.mkdir(parents=True)
         
-        # get the paths to the data (i.e., darks/flats)
+        # get the paths to the calibration images
         if data_directory is not None:
             raw_data_paths = create_file_paths(data_directory=Path(data_directory))
             self.data_paths = self._validate_data(raw_data_paths)
         else:
             self.data_paths = None
         
+        self.master_images: Dict[str, NDArray[np.float64]] = {}
+        self.master_variances: Dict[str, NDArray[np.float64]] = {}
+        
         # load master images if they already exist
-        self.master_images = {}
         if self.master_image_path is not None:
             if self.master_image_path.is_file():
-                self.master_images.update(self._read_master_image())
+                self._read_master_image()
 
 
     @property
@@ -91,7 +93,7 @@ class Corrector(ABC):
         fltr: str,
         *args,
         **kwargs,
-        ) -> NDArray[np.float64] | Tuple[NDArray[np.float64], Any]:
+        ) -> Tuple[NDArray[np.float64], float | NDArray[np.float64]]:
         """
         Apply the required correction to an image.
         
@@ -104,8 +106,9 @@ class Corrector(ABC):
         
         Returns
         -------
-        NDArray[np.float64] | Tuple[NDArray[np.float64], Any]
-            The corrected image plus any auxillary data that may be required.
+        Tuple[NDArray[np.float64], float | NDArray[np.float64]]
+            The corrected image and the variance of the correction term. The variance may be a `float` (e.g., if
+            the dark noise is calculated from the exposure-integrated dark current) or an `NDArray`.
         """
         
         pass
@@ -134,31 +137,23 @@ class Corrector(ABC):
 
     def _read_master_image(
         self,
-        ) -> Dict[str, NDArray]:
+        ) -> None:
         """
         Read the master images from the output directory.
-        
-        Parameters
-        ----------
-        out_directory : Path
-            The directory path to the master images.
-        
-        Returns
-        -------
-        Dict[str, NDArray]
-            The master images {filter: image}.
         """
         
-        master_images = {}
         with fits.open(self.master_image_path) as hdul:
-            # skip primary HDU since it's empty
+            # skip primary HDU since it doesn't contain any data
             for hdu in hdul[1:]:
                 # filter info is saved using instrument format so it's safe to use the filter keyword instead of the
                 # instrument.get_filter() method
                 fltr = hdu.header[self.instrument.filter_kw]
-                master_images[fltr] = np.asarray(hdu.data, dtype=np.float64)
-        
-        return master_images
+                name = hdu.header['EXTNAME']
+                data = np.asarray(hdu.data, dtype=np.float64)
+                if name == 'DATA':
+                    self.master_images[fltr] = data
+                elif name == 'VARIANCE':
+                    self.master_variances[fltr] = data
 
 
     @abstractmethod
@@ -186,21 +181,58 @@ class Corrector(ABC):
         pass
 
 
-    @abstractmethod
     def _save_master_image(
         self,
         overwrite: bool,
         ) -> None:
         """
-        Save the master image(s) to a compressed FITS cube.
+        Save the master images and their corresponding variances to a compressed FITS cube.
         
         Parameters
         ----------
         overwrite : bool
-            Whether to overwrite existing master images.
+            Whether to overwrite an existing master images file.
         """
         
-        pass
+        if self.__class__.__name__ == 'BiasCorrector':
+            comment = 'This FITS file contains master bias images and their corresponding variances for each filter.'
+        elif self.__class__.__name__ == 'DarkNoiseCorrector':
+            comment = 'This FITS file contains master dark images and their corresponding variances for each filter.'
+        elif self.__class__.__name__ == 'FlatFieldCorrector':
+            comment = 'This FITS file contains master flat-field images and their corresponding variances for each filter.'
+        else:
+            raise ValueError(f'[OPTICAM] Unrecognised corrector: {self.__class__.__name__}.')
+        
+        hdr = fits.Header()
+        hdr['COMMENT'] = comment
+        empty_primary = fits.PrimaryHDU(header=hdr)
+        hdul = fits.HDUList([empty_primary])
+        
+        for fltr in self.master_images:
+            # master image
+            hdr = fits.Header()
+            # filter is already in instrument format so no need to use instrument.get_filter()
+            hdr[self.instrument.filter_kw] = fltr
+            hdu = fits.ImageHDU(
+                data=self.master_images[fltr],
+                header=hdr,
+                name='DATA',
+                )
+            hdul.append(hdu)
+            
+            # master variance
+            hdr = fits.Header()
+            # filter is already in instrument format so no need to use instrument.get_filter()
+            hdr[self.instrument.filter_kw] = fltr
+            hdu = fits.ImageHDU(
+                data=self.master_variances[fltr],
+                header=hdr,
+                name='VARIANCE',
+                )
+            hdul.append(hdu)
+        
+        if not self.master_image_path.is_file() or overwrite:
+            hdul.writeto(self.master_image_path, overwrite=overwrite)
 
 
     @abstractmethod
@@ -251,7 +283,7 @@ class BiasCorrector(Corrector):
         self,
         image: NDArray[np.float64],
         fltr: str,
-        ) -> NDArray[np.float64]:
+        ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
         """
         Subtract the bias from an image.
         
@@ -264,8 +296,8 @@ class BiasCorrector(Corrector):
         
         Returns
         -------
-        NDArray[np.float64]
-            The corrected image.
+        Tuple[NDArray[np.float64], NDArray[np.float64]]
+            The corrected image and the variance of the master bias image.
         
         Raises
         ------
@@ -279,7 +311,7 @@ class BiasCorrector(Corrector):
             print(f'[OPTICAM] {fltr} master bias image not found. Attempting to create.')
             self.create_master_images()
         
-        return image - self.master_images[fltr]
+        return image - self.master_images[fltr], self.master_variances[fltr]
 
 
     def create_master_images(
@@ -314,11 +346,11 @@ class BiasCorrector(Corrector):
                 
                 biases.append(bias)
             
-            # create master bias image
-            master_bias = np.median(biases, axis=0)
-            
-            # hold master bias in memory (faster than having to read it from disk every time correct() is called)
-            self.master_images[fltr] = master_bias
+            # use mean since bias frames shouldn't contain outliers like cosmic rays
+            self.master_images[fltr] = np.mean(biases, axis=0)
+            self.master_variances[fltr] = np.var(biases, axis=0, ddof=1) / len(biases)
+        
+        print('[OPTICAM] Master bias image(s) created.')
         
         self._save_master_image(overwrite=overwrite)
         
@@ -392,35 +424,6 @@ class BiasCorrector(Corrector):
         
         if return_errors:
             return errors
-
-
-    def _save_master_image(
-        self,
-        overwrite: bool,
-        ) -> None:
-        """
-        Save the bias images to a compressed FITS cube.
-        
-        Parameters
-        ----------
-        overwrite : bool
-            Whether to overwrite existing master flats.
-        """
-        
-        hdr = fits.Header()
-        hdr['COMMENT'] = 'This FITS file contains master bias images for each filter.'
-        empty_primary = fits.PrimaryHDU(header=hdr)
-        hdul = fits.HDUList([empty_primary])
-        
-        for fltr, img in self.master_images.items():
-            hdr = fits.Header()
-            # filter is already in instrument format so no need to use instrument.get_filter()
-            hdr[self.instrument.filter_kw] = fltr
-            hdu = fits.ImageHDU(img, hdr)
-            hdul.append(hdu)
-        
-        if not self.master_image_path.is_file() or overwrite:
-            hdul.writeto(self.master_image_path, overwrite=overwrite)
 
 
     def _validate_data(
@@ -535,7 +538,7 @@ class DarkNoiseCorrector(Corrector):
         fltr: str,
         bias_corrector: BiasCorrector | None = None,
         dark_flux: float | None = None,
-        ) -> NDArray[np.float64] | Tuple[NDArray[np.float64], float]:
+        ) -> Tuple[NDArray[np.float64], float | NDArray[np.float64]]:
         """
         Subtract the dark noise from an image.
         
@@ -554,8 +557,7 @@ class DarkNoiseCorrector(Corrector):
         Returns
         -------
         NDArray[np.float64] | Tuple[NDArray[np.float64], float]
-            If a value is passed to `dark_flux`, only the dark noise subtracted image is returned. Otherwise, the dark
-            noise subtracted image and the median dark noise value are returned.
+            The corrected image and the variance of the master dark image.
         
         Raises
         ------
@@ -572,9 +574,9 @@ class DarkNoiseCorrector(Corrector):
                     bias_corrector=bias_corrector,
                     )
             
-            return image - self.master_images[fltr], self.median_dark_fluxes[fltr]
+            return image - self.master_images[fltr], self.master_variances[fltr]
         else:
-            return image - dark_flux
+            return image - dark_flux, dark_flux
 
 
     def create_master_images(
@@ -607,27 +609,26 @@ class DarkNoiseCorrector(Corrector):
                     dark = np.array(hdul[0].data, dtype=np.float64)
                 
                 # apply bias correction
-                # TODO: check whether bias should be applied after rebinning instead
+                # TODO: check whether bias should be corrected after rebinning instead?
                 if bias_corrector is not None:
-                    dark = bias_corrector.correct(
+                    dark, bias_var = bias_corrector.correct(
                         image=dark,
                         fltr=fltr,
                         )
+                else:
+                    bias_var = 0.
                 
                 if self.rebin_factor > 1:
                     dark = rebin_image(dark, self.rebin_factor)
                 
                 darks.append(dark)
             
-            # create master dark
-            master_dark = np.median(darks, axis=0)
-            
-            # hold master dark in memory (faster than having to read it from disk every time correct() is called)
-            self.master_images[fltr] = master_dark
+            self.master_images[fltr] = np.median(darks, axis=0)
+            self.master_variances[fltr] = np.pi / (2 * len(darks)) * (np.var(darks, axis=0, ddof=1) + bias_var)
         
-        self._save_master_image(
-            overwrite=overwrite,
-            )
+        print('[OPTICAM] Master dark image(s) created.')
+        
+        self._save_master_image(overwrite=overwrite)
         
         print(f'[OPTICAM] Master dark image(s) saved to {self.master_image_path}.')
 
@@ -716,35 +717,6 @@ class DarkNoiseCorrector(Corrector):
         
         if return_errors:
             return errors
-
-
-    def _save_master_image(
-        self,
-        overwrite: bool,
-        ) -> None:
-        """
-        Save the master dark(s) to a compressed FITS cube.
-        
-        Parameters
-        ----------
-        overwrite : bool
-            Whether to overwrite existing master dark images.
-        """
-        
-        hdr = fits.Header()
-        hdr['COMMENT'] = 'This FITS file contains master dark images for each filter.'
-        empty_primary = fits.PrimaryHDU(header=hdr)
-        hdul = fits.HDUList([empty_primary])
-        
-        for fltr, img in self.master_images.items():
-            hdr = fits.Header()
-            # filter is already in instrument format so no need to use instrument.get_filter()
-            hdr[self.instrument.filter_kw] = fltr
-            hdu = fits.ImageHDU(img, hdr)
-            hdul.append(hdu)
-        
-        if not self.master_image_path.is_file() or overwrite:
-            hdul.writeto(self.master_image_path, overwrite=overwrite)
 
 
     def _validate_data(
@@ -837,7 +809,7 @@ class FlatFieldCorrector(Corrector):
         image: NDArray[np.float64],
         fltr: str,
         bias_corrector : BiasCorrector | None = None,
-        ) -> NDArray[np.float64]:
+        ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
         """
         Correct an image for flat-fielding.
         
@@ -850,8 +822,9 @@ class FlatFieldCorrector(Corrector):
         
         Returns
         -------
-        NDArray[np.float64]
-            The corrected image.
+        Tuple[NDArray[np.float64], NDArray[np.float64]]
+            The corrected image and the variance of the master flat-field image scaled by the square of the calibrated
+            image.
         """
         
         if fltr not in self.data_paths.keys():
@@ -866,8 +839,13 @@ class FlatFieldCorrector(Corrector):
             except Exception as e:
                 raise Exception(f"[OPTICAM] Could not create master flat-field image(s) due to the following exception: {e}.")
         
+        calibrated_image = image / self.master_images[fltr]
+        
+        # propagate multiplicative variance
+        var = self.master_variances[fltr] * calibrated_image**2 / self.master_images[fltr]**2
+        
         # correct image for flat-fielding
-        return image / self.master_images[fltr]
+        return calibrated_image, var
 
 
     def create_master_images(
@@ -900,21 +878,26 @@ class FlatFieldCorrector(Corrector):
                     flat = np.array(hdul[0].data, dtype=np.float64)
                 
                 if bias_corrector is not None:
-                    flat = bias_corrector.correct(
+                    flat, bias_var = bias_corrector.correct(
                         image=flat,
                         fltr=fltr,
                         )
+                else:
+                    bias_var = 0.
                 
                 if self.rebin_factor > 1:
                     flat = rebin_image(flat, self.rebin_factor)
                 
-                flats.append(flat / np.median(flat))  # add normalised flat-field image to list
+                flats.append(flat)
             
-            # create master flat
-            master_flat = np.median(flats, axis=0)
+            # use median to account for outliers
+            raw_master_flat = np.median(flats, axis=0)
+            norm = np.median(raw_master_flat)
             
-            # hold master flat in memory (faster than having to read it from disk every time correct() is called)
-            self.master_images[fltr] = master_flat
+            self.master_images[fltr] = raw_master_flat / norm
+            self.master_variances[fltr] = np.pi / (2 * len(flats)) * (np.var(flats, axis=0, ddof=1) + bias_var) / norm**2
+        
+        print('[OPTICAM] Master flat-field image(s) created.')
         
         self._save_master_image(overwrite=overwrite)
         
@@ -985,35 +968,6 @@ class FlatFieldCorrector(Corrector):
         
         if return_errors:
             return errors
-
-
-    def _save_master_image(
-        self,
-        overwrite: bool,
-        ) -> None:
-        """
-        Save the master flat(s) to a compressed FITS cube.
-        
-        Parameters
-        ----------
-        overwrite : bool
-            Whether to overwrite existing master flats.
-        """
-        
-        hdr = fits.Header()
-        hdr['COMMENT'] = 'This FITS file contains master flat-field images for each filter.'
-        empty_primary = fits.PrimaryHDU(header=hdr)
-        hdul = fits.HDUList([empty_primary])
-        
-        for fltr, img in self.master_images.items():
-            hdr = fits.Header()
-            # filter is already in instrument format so no need to use instrument.get_filter()
-            hdr[self.instrument.filter_kw] = fltr
-            hdu = fits.ImageHDU(img, hdr)
-            hdul.append(hdu)
-        
-        if not self.master_image_path.is_file() or overwrite:
-            hdul.writeto(self.master_image_path, overwrite=overwrite)
 
 
     def _validate_data(

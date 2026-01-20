@@ -114,19 +114,25 @@ def create_file_paths(
 
 def propagate_errors(
     data: NDArray,
-    dark_flux: float,
+    bias_var: float | NDArray[np.float64],
+    dark_var: float | NDArray[np.float64],
+    flat_var: float | NDArray[np.float64],
     background_rms: float | NDArray,
     read_noise: float,
     ) -> NDArray[np.float64]:
     """
-    Propagate the shot noise, dark noise, sky noise, and read noise error contributions.
+    Compute the propagated error image.
     
     Parameters
     ----------
     data : NDArray
-        The **dark-subtracted** and **background-subtracted** image.
-    dark_flux : float
-        The dark current's flux contribution.
+        The calibrated, background-subtracted image.
+    bias_var : float | NDArray[np.float64]
+        The bias correction variance term.
+    dark_var : float | NDArray[np.float64]
+        The dark noise correction variance term.
+    flat_var : float | NDArray[np.float64]
+        The flat-field correction variance term scaled by the square of the calibrated image.
     background_rms : float | NDArray
         The background RMS.
     read_noise : float
@@ -135,12 +141,15 @@ def propagate_errors(
     Returns
     -------
     NDArray[np.float64]
-        The error.
+        The propagated error image.
     """
     
-    shot_noise_variance = np.clip(data, 0., None)  # clip negative values
-    
-    total_variance = shot_noise_variance + background_rms**2 + read_noise**2 + dark_flux
+    total_variance = np.clip(data, 0., None)  # source shot noise
+    total_variance += background_rms**2
+    total_variance += read_noise**2
+    total_variance += bias_var
+    total_variance += dark_var
+    total_variance += flat_var
     
     return np.sqrt(total_variance)
 

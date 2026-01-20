@@ -58,7 +58,9 @@ class BasePhotometer(ABC):
     def compute(
         self,
         image: NDArray,
-        dark_flux: float,
+        bias_var: float | NDArray,
+        dark_var: float | NDArray,
+        flat_var: float | NDArray,
         background_rms: NDArray | None,
         source_coords: NDArray,
         image_coords: NDArray | None,
@@ -72,8 +74,12 @@ class BasePhotometer(ABC):
         ----------
         image : NDArray
             The image. If `self.local_background_estimator` is undefined, this image will be background subtracted.
-        dark_flux : float
-            The dark current's "flux" contribution.
+        bias_var : float | NDArray
+            The bias correction variance term.
+        dark_var : float | NDArray
+            The dark noise correction variance term.
+        flat_var : float | NDArray
+            The flat-field correction variance term.
         background_rms : NDArray | None
             The background RMS. May be `None` if `self.local_background_estimator` is defined.
         source_coords : NDArray
@@ -240,7 +246,9 @@ class BasePhotometer(ABC):
         results: Dict[str, List],
         phot_function: Callable,
         image: NDArray,
-        dark_flux: float,
+        bias_var: float | NDArray[np.float64],
+        dark_var: float | NDArray[np.float64],
+        flat_var: float | NDArray[np.float64],
         background_rms: NDArray | None,
         position: NDArray,
         psf_params: Dict[str, float],
@@ -260,8 +268,12 @@ class BasePhotometer(ABC):
             the background and background error if `local_background_estimator` is defined.
         image : NDArray
             The image.
-        dark_flux : float
-            The dark current's "flux" contribution.
+        bias_var : float | NDArray
+            The bias correction variance term.
+        dark_var : float | NDArray
+            The dark noise correction variance term.
+        flat_var : float | NDArray
+            The flat-field correction variance term.
         background_rms : NDArray | None
             The background RMS. May be `None` if `self.local_background_estimator` is defined.
         position : NDArray
@@ -282,7 +294,9 @@ class BasePhotometer(ABC):
         if self.local_background_estimator is None:
             flux, flux_err = phot_function(
                 image=image,
-                dark_flux=dark_flux,
+                bias_var=bias_var,
+                dark_var=dark_var,
+                flat_var=flat_var,
                 background_rms=background_rms,
                 position=position,
                 psf_params=psf_params,
@@ -294,7 +308,9 @@ class BasePhotometer(ABC):
         else:
             flux, flux_err, background, background_err = phot_function(
                 image=image,
-                dark_flux=dark_flux,
+                bias_var=bias_var,
+                dark_var=dark_var,
+                flat_var=flat_var,
                 background_rms=background_rms,
                 position=position,
                 psf_params=psf_params,
@@ -387,7 +403,9 @@ class AperturePhotometer(BasePhotometer):
     def compute(
         self,
         image: NDArray,
-        dark_flux: float,
+        bias_var: float | NDArray,
+        dark_var: float | NDArray,
+        flat_var: float | NDArray,
         background_rms: NDArray | None,
         source_coords: NDArray,
         image_coords: NDArray | None,
@@ -401,8 +419,12 @@ class AperturePhotometer(BasePhotometer):
         ----------
         image : NDArray
             The image. If `self.local_background_estimator` is undefined, this image will be background subtracted.
-        dark_flux : float
-            The dark current's "flux" contribution.
+        bias_var : float | NDArray
+            The bias correction variance term.
+        dark_var : float | NDArray
+            The dark noise correction variance term.
+        flat_var : float | NDArray
+            The flat-field correction variance term scaled by the square of the calibrated image.
         background_rms : NDArray | None
             The background RMS. May be `None` if `self.local_background_estimator` is defined.
         source_coords : NDArray
@@ -445,7 +467,9 @@ class AperturePhotometer(BasePhotometer):
                 results=results,
                 phot_function=self.compute_aperture_flux,
                 image=image,
-                dark_flux=dark_flux,
+                bias_var=bias_var,
+                dark_var=dark_var,
+                flat_var=flat_var,
                 background_rms=background_rms,
                 position=position,
                 psf_params=psf_params,
@@ -458,7 +482,9 @@ class AperturePhotometer(BasePhotometer):
     def compute_aperture_flux(
         self,
         image: NDArray,
-        dark_flux: float,
+        bias_var: float | NDArray,
+        dark_var: float | NDArray,
+        flat_var: float | NDArray,
         background_rms: NDArray | None,
         position: NDArray,
         psf_params: Dict[str, float],
@@ -471,8 +497,12 @@ class AperturePhotometer(BasePhotometer):
         ----------
         image : NDArray
             The image.
-        dark_flux : float
-            The dark current's "flux" contribution.
+        bias_var : float | NDArray
+            The bias correction variance term.
+        dark_var : float | NDArray
+            The dark noise correction variance term.
+        flat_var : float | NDArray
+            The flat-field correction variance term scaled by the square of the calibrated image.
         background_rms : NDArray | None
             The background RMS. May be `None` if `self.local_background_estimator` is defined.
         position : NDArray
@@ -499,7 +529,9 @@ class AperturePhotometer(BasePhotometer):
         if self.local_background_estimator is None:
             error = propagate_errors(
                 data=image,
-                dark_flux=dark_flux,
+                bias_var=bias_var,
+                dark_var=dark_var,
+                flat_var=flat_var,
                 background_rms=np.asarray(background_rms),
                 read_noise=read_noise,
                 )
@@ -522,7 +554,9 @@ class AperturePhotometer(BasePhotometer):
             data_clean = image - local_background
             error = propagate_errors(
                 data=data_clean,
-                dark_flux=dark_flux,
+                bias_var=bias_var,
+                dark_var=dark_var,
+                flat_var=flat_var,
                 background_rms=local_background_rms,
                 read_noise=read_noise,
             )
@@ -592,7 +626,9 @@ class OptimalPhotometer(BasePhotometer):
     def compute(
         self,
         image: NDArray,
-        dark_flux: float,
+        bias_var: float | NDArray[np.float64],
+        dark_var: float | NDArray[np.float64],
+        flat_var: float | NDArray[np.float64],
         background_rms: NDArray | None,
         source_coords: NDArray,
         image_coords: NDArray | None,
@@ -606,8 +642,12 @@ class OptimalPhotometer(BasePhotometer):
         ----------
         image : NDArray
             The image. If `self.local_background_estimator` is undefined, this image will be background subtracted.
-        dark_flux : float
-            The dark current's "flux" contribution.
+        bias_var : float | NDArray
+            The bias correction variance term.
+        dark_var : float | NDArray
+            The dark noise correction variance term.
+        flat_var : float | NDArray
+            The flat-field correction variance term scaled by the square of the calibrated image.
         background_rms : NDArray | None
             The background RMS. May be `None` if `self.local_background_estimator` is defined.
         source_coords : NDArray
@@ -647,7 +687,9 @@ class OptimalPhotometer(BasePhotometer):
                 results=results,
                 phot_function=self.compute_optimal_flux,
                 image=image,
-                dark_flux=dark_flux,
+                bias_var=bias_var,
+                dark_var=dark_var,
+                flat_var=flat_var,
                 background_rms=background_rms,
                 position=position,
                 psf_params=psf_params,
@@ -660,7 +702,9 @@ class OptimalPhotometer(BasePhotometer):
     def compute_optimal_flux(
         self,
         image: NDArray,
-        dark_flux: float,
+        bias_var: float | NDArray[np.float64],
+        dark_var: float | NDArray[np.float64],
+        flat_var: float | NDArray[np.float64],
         background_rms: NDArray | None,
         position: NDArray,
         psf_params: Dict[str, float],
@@ -673,8 +717,12 @@ class OptimalPhotometer(BasePhotometer):
         ----------
         image : NDArray
             The image.
-        dark_flux : float
-            The dark current's "flux" contribution.
+        bias_var : float | NDArray
+            The bias correction variance term.
+        dark_var : float | NDArray
+            The dark noise correction variance term.
+        flat_var : float | NDArray
+            The flat-field correction variance term scaled by the square of the calibrated image.
         background_rms : NDArray | None
             The background RMS. May be `None` if `self.local_background_estimator` is defined.
         position : NDArray
@@ -695,7 +743,9 @@ class OptimalPhotometer(BasePhotometer):
         
         def get_flux_and_error(
             image: NDArray[np.float64],
-            dark_flux: float,
+            bias_var: float | NDArray[np.float64],
+            dark_var: float | NDArray[np.float64],
+            flat_var: float | NDArray[np.float64],
             background_rms: float | NDArray[np.float64],
             read_noise: float,
             position: NDArray[np.float64],
@@ -708,8 +758,12 @@ class OptimalPhotometer(BasePhotometer):
             ----------
             image : NDArray[np.float64]
                 The background-subtracted image.
-            dark_flux : float
-                The dark flux contribution to `image`.
+            bias_var : float | NDArray
+                The bias correction variance term.
+            dark_var : float | NDArray
+                The dark noise correction variance term.
+            flat_var : float | NDArray
+                The flat-field correction variance term scaled by the square of the calibrated image.
             background_rms : float | NDArray[np.float64]
                 The background RMS. May be a scalar value or an `NDArray` with the same shape as `image`.
             read_noise : float
@@ -727,7 +781,9 @@ class OptimalPhotometer(BasePhotometer):
             
             error = propagate_errors(
                 data=image,
-                dark_flux=dark_flux,
+                bias_var=bias_var,
+                dark_var=dark_var,
+                flat_var=flat_var,
                 background_rms=background_rms,
                 read_noise=read_noise,
                 )
@@ -748,8 +804,10 @@ class OptimalPhotometer(BasePhotometer):
         if self.local_background_estimator is None:
             return get_flux_and_error(
                 image=image,
-                dark_flux=dark_flux,
-                background_rms=background_rms,
+                bias_var=bias_var,
+                dark_var=dark_var,
+                flat_var=flat_var,
+                background_rms=np.asarray(background_rms),
                 read_noise=read_noise,
                 position=position,
                 psf_params=psf_params,
@@ -766,7 +824,9 @@ class OptimalPhotometer(BasePhotometer):
             
             flux, flux_error = get_flux_and_error(
                 image=image - local_background,
-                dark_flux=dark_flux,
+                bias_var=bias_var,
+                dark_var=dark_var,
+                flat_var=flat_var,
                 background_rms=local_background_rms,
                 read_noise=read_noise,
                 position=position,
@@ -872,8 +932,10 @@ def get_growth_curve(
         
         flux = photometer.compute_aperture_flux(
             image=image,
-            dark_flux=0.,  # flux error not needed so dark flux not required
-            background_rms=np.zeros(shape=(1,)),  # flux error not needed so background RMS not required
+            bias_var=0.,
+            dark_var=0.,
+            flat_var=0.,
+            background_rms=0.,
             position=position,
             psf_params={},  # empty dict since not needed
             read_noise=read_noise,
