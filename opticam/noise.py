@@ -224,14 +224,21 @@ def get_noise_params(
     
     coords = np.asarray([catalog['xcentroid'], catalog['ycentroid']]).T
     
-    img, dark_flux = get_data(
+    img = get_data(
         file_path=file_path,
         instrument=instrument,
         dark_corrector=dark_corrector,
         flat_corrector=None,
         rebin_factor=1,
         remove_cosmic_rays=False,
-        )
+        )[0]
+    
+    # get (median) dark flux
+    fltr = instrument.get_filter(file_path)
+    if fltr in dark_corrector.master_images.keys():
+        dark_var = dark_corrector.master_variances[fltr]
+    else:
+        dark_var = instrument.get_dark_flux(file_path)
     
     # global background
     bkg = background(img)
@@ -244,7 +251,9 @@ def get_noise_params(
     phot = AperturePhotometer()
     phot_results = phot.compute(
         image=img_clean,
-        dark_flux=dark_flux,
+        bias_var=0.,
+        dark_var=dark_var,
+        flat_var=0.,
         background_rms=np.sqrt(n_sky),
         source_coords=coords,
         image_coords=coords,
@@ -262,7 +271,7 @@ def get_noise_params(
     # mask unphysical flux values
     mask = fluxes > 1.
     
-    return source_ids[mask], fluxes[mask], flux_errs[mask], N_pix, n_sky, dark_flux
+    return source_ids[mask], fluxes[mask], flux_errs[mask], N_pix, n_sky, np.median(dark_var)
 
 
 def get_snrs(
