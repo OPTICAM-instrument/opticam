@@ -28,6 +28,8 @@ class Corrector(ABC):
         data_directory: Path | str | None = None,
         instrument: Instrument = OPTICAM_MX(),
         rebin_factor: int = 1,
+        *args,
+        **kwargs,
         ) -> None:
         """
         Initialise the corrector.
@@ -48,6 +50,7 @@ class Corrector(ABC):
         
         self.out_directory = Path(out_directory) if out_directory is not None else None
         self.instrument = instrument
+        self.passed_checks = False
         
         assert isinstance(rebin_factor, int), "[OPTICAM] Non-integer rebin factors are not supported!"
         self.rebin_factor = rebin_factor
@@ -422,6 +425,9 @@ class BiasCorrector(Corrector):
         elif warnings > 1:
             print(f'[OPTICAM] BiasCorrector triggered a warning during {warnings} checks. Warnings may be ignored provided their caveats are satisfied.')
         
+        if errors == 0:
+            self.passed_checks = True
+        
         if return_errors:
             return errors
 
@@ -499,6 +505,44 @@ class DarkNoiseCorrector(Corrector):
     """
 
 
+    def __init__(
+        self,
+        out_directory: Path | str | None = None,
+        data_directory: Path | str | None = None,
+        instrument: Instrument = OPTICAM_MX(),
+        rebin_factor: int = 1,
+        bias_corrector: BiasCorrector | None = None,
+        ) -> None:
+        """
+        Initialise the dark noise corrector.
+        
+        Parameters
+        ----------
+        out_directory : Path | str | None, optional
+            The path to the output directory, by default `None`. Master dark images will be saved here.
+        data_directory : Path | str | None, optional
+            The path to the data directory, by default `None`. This must point to a directory containing a series of
+            dark images.
+        instrument : Instrument, optional
+            The instrument, by default `OPTICAM_MX()`.
+        rebin_factor : int, optional
+            The factor by which to rebin the data, by default 1. Useful if, for example, calibration images were taken
+            using a higher resolution than the science images.
+        bias_corrector : BiasCorrector | None, optional
+            The bias corrector to use to bias-correct the dark images, by default `None`. If `None`, no bias
+            corrections are performed.
+        """
+        
+        self.bias_corrector = bias_corrector
+        
+        super().__init__(
+                         out_directory=out_directory,
+                         data_directory=data_directory,
+                         instrument=instrument,
+                         rebin_factor=rebin_factor,
+                         )
+
+
     @property
     def master_image_path(self) -> Path | None:
         """
@@ -513,30 +557,10 @@ class DarkNoiseCorrector(Corrector):
         return self.out_directory.joinpath('master_darks.fits.gz') if self.out_directory is not None else None
 
 
-    @property
-    def median_dark_fluxes(self) -> Dict[str, float]:
-        """
-        The median dark flux for each master dark image.
-        
-        Returns
-        -------
-        Dict[str, float]
-            The median dark flux for each master dark image.
-        """
-        
-        median_dark_fluxes: Dict[str, float] = {}
-        if len(self.master_images) > 0:
-            for fltr in self.master_images:
-                median_dark_fluxes[fltr] = float(np.median(self.master_images[fltr]))
-        
-        return median_dark_fluxes
-
-
     def correct(
         self,
         image: NDArray[np.float64],
         fltr: str,
-        bias_corrector: BiasCorrector | None = None,
         dark_flux: float | None = None,
         ) -> Tuple[NDArray[np.float64], float | NDArray[np.float64]]:
         """
@@ -548,8 +572,6 @@ class DarkNoiseCorrector(Corrector):
             The image.
         fltr : str
             The image filter.
-        bias_corrector : BiasCorrector | None, optional
-            The bias corrector, by default `None` (no bias corrections).
         dark_flux : float | None, optional
             The exposure-integrated dark current, by default `None`. If the instrument provides a measure of the dark
             current in the image header, this obviates the need for master darks.
@@ -570,9 +592,7 @@ class DarkNoiseCorrector(Corrector):
                 raise ValueError(f"[OPTICAM] No dark images found for {fltr} filter.")
             if fltr not in self.master_images.keys() or self.master_images[fltr] is None:
                 print(f'[OPTICAM] {fltr} master dark image not found. Attempting to create.')
-                self.create_master_images(
-                    bias_corrector=bias_corrector,
-                    )
+                self.create_master_images()
             
             return image - self.master_images[fltr], self.master_variances[fltr]
         else:
@@ -581,7 +601,6 @@ class DarkNoiseCorrector(Corrector):
 
     def create_master_images(
         self,
-        bias_corrector: BiasCorrector | None = None,
         overwrite: bool = False,
         ) -> None:
         """
@@ -610,8 +629,8 @@ class DarkNoiseCorrector(Corrector):
                 
                 # apply bias correction
                 # TODO: check whether bias should be corrected after rebinning instead?
-                if bias_corrector is not None:
-                    dark, bias_var = bias_corrector.correct(
+                if self.bias_corrector is not None:
+                    dark, bias_var = self.bias_corrector.correct(
                         image=dark,
                         fltr=fltr,
                         )
@@ -715,6 +734,9 @@ class DarkNoiseCorrector(Corrector):
         elif warnings > 1:
             print(f'[OPTICAM] DarkNoiseCorrector triggered a warning during {warnings} checks. Warnings may be ignored provided their caveats are satisfied.')
         
+        if errors == 0:
+            self.passed_checks = True
+        
         if return_errors:
             return errors
 
@@ -790,6 +812,49 @@ class FlatFieldCorrector(Corrector):
     """
 
 
+    def __init__(
+        self,
+        out_directory: Path | str | None = None,
+        data_directory: Path | str | None = None,
+        instrument: Instrument = OPTICAM_MX(),
+        rebin_factor: int = 1,
+        bias_corrector: BiasCorrector | None = None,
+        dark_corrector: DarkNoiseCorrector | None = None,
+        ) -> None:
+        """
+        Initialise the flat-field corrector.
+        
+        Parameters
+        ----------
+        out_directory : Path | str | None, optional
+            The path to the output directory, by default `None`. Master flat-field images will be saved here.
+        data_directory : Path | str | None, optional
+            The path to the data directory, by default `None`. This must point to a directory containing a series of
+            flat-field images.
+        instrument : Instrument, optional
+            The instrument, by default `OPTICAM_MX()`.
+        rebin_factor : int, optional
+            The factor by which to rebin the data, by default 1. Useful if, for example, calibration images were taken
+            using a higher resolution than the science images.
+        bias_corrector : BiasCorrector | None, optional
+            The bias corrector to use to bias-correct the flat-field images, by default `None`. If `None`, no bias
+            corrections are performed.
+        dark_corrector : DarkNoiseCorrector | None, optional
+            The dark noise corrector to use to perform dark noise corrections, by default `None`. If `None`, no dark
+            noise corrections are performed.
+        """
+        
+        self.bias_corrector = bias_corrector
+        self.dark_corrector = dark_corrector
+        
+        super().__init__(
+                         out_directory=out_directory,
+                         data_directory=data_directory,
+                         instrument=instrument,
+                         rebin_factor=rebin_factor,
+                         )
+
+
     @property
     def master_image_path(self) -> Path | None:
         """
@@ -808,7 +873,6 @@ class FlatFieldCorrector(Corrector):
         self,
         image: NDArray[np.float64],
         fltr: str,
-        bias_corrector : BiasCorrector | None = None,
         ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
         """
         Correct an image for flat-fielding.
@@ -833,11 +897,9 @@ class FlatFieldCorrector(Corrector):
         if fltr not in self.master_images.keys():
             print(f'[OPTICAM] {fltr} master flat-field image not found. Attempting to create.')
             try:
-                self.create_master_images(
-                    bias_corrector=bias_corrector,
-                    )
+                self.create_master_images()
             except Exception as e:
-                raise Exception(f"[OPTICAM] Could not create master flat-field image(s) due to the following exception: {e}.")
+                raise Exception(f"[OPTICAM] Could not create master flat-field image(s) due to the following exception: {e}")
         
         calibrated_image = image / self.master_images[fltr]
         
@@ -850,7 +912,6 @@ class FlatFieldCorrector(Corrector):
 
     def create_master_images(
         self,
-        bias_corrector: BiasCorrector | None = None,
         overwrite: bool = False,
         ) -> None:
         """
@@ -858,6 +919,8 @@ class FlatFieldCorrector(Corrector):
         
         Parameters
         ----------
+        bias_corrector : BiasCorrector | None, optional
+            The bias corrector.
         overwrite : bool, optional
             Whether to overwrite the existing master flat-field image, by default `False`.
         """
@@ -865,6 +928,11 @@ class FlatFieldCorrector(Corrector):
         if self.master_image_path.is_file() and not overwrite:
             print(f'[OPTICAM] Master flats file already exists. To overwrite existing flats, set overwrite=True.')
             return
+        
+        if not self.passed_checks:
+            valid, flat_exptime, dark_exptime = self._dark_corrector_is_valid()
+            if not valid:
+                raise ValueError(f'[OPTICAM] inconsistent exposure times between flat-field images and dark images. Flat-field exposure time: {flat_exptime} s; dark exposure time: {dark_exptime} s.')
         
         for fltr in self.data_paths.keys():
             
@@ -876,14 +944,24 @@ class FlatFieldCorrector(Corrector):
             for flat_path in self.data_paths[fltr]:
                 with fits.open(flat_path) as hdul:
                     flat = np.array(hdul[0].data, dtype=np.float64)
+                    header = hdul[0].header
                 
-                if bias_corrector is not None:
-                    flat, bias_var = bias_corrector.correct(
+                if self.bias_corrector is not None:
+                    flat, bias_var = self.bias_corrector.correct(
                         image=flat,
                         fltr=fltr,
                         )
                 else:
                     bias_var = 0.
+                
+                if self.dark_corrector is not None:
+                    flat, dark_var = self.dark_corrector.correct(
+                        image=flat,
+                        fltr=fltr,
+                        dark_flux=self.instrument.get_dark_flux(header=header),
+                        )
+                else:
+                    dark_var = 0.
                 
                 if self.rebin_factor > 1:
                     flat = rebin_image(flat, self.rebin_factor)
@@ -895,7 +973,7 @@ class FlatFieldCorrector(Corrector):
             norm = np.median(raw_master_flat)
             
             self.master_images[fltr] = raw_master_flat / norm
-            self.master_variances[fltr] = np.pi / (2 * len(flats)) * (np.var(flats, axis=0, ddof=1) + bias_var) / norm**2
+            self.master_variances[fltr] = np.pi / (2 * len(flats)) * (np.var(flats, axis=0, ddof=1) + bias_var + dark_var) / norm**2
         
         print('[OPTICAM] Master flat-field image(s) created.')
         
@@ -927,6 +1005,10 @@ class FlatFieldCorrector(Corrector):
             If `return_errors=True`, the number of errors raised is returned. Otherwise, nothing is returned.
         """
         
+        flat_path = next(iter(self.data_paths.values()))[0]  # get the path to a random flat
+        flat_header = fits.getheader(flat_path)
+        image_path = next(iter(data_file_paths_by_filter.values()))[0]  # get the path to a science image
+        
         errors = 0
         warnings = 0
         
@@ -937,12 +1019,15 @@ class FlatFieldCorrector(Corrector):
             errors += 1
             print(f'[OPTICAM] ERROR: inconsistent filters found between the flat-field images and the science images. Flat-field image filters: ({','.join(self.data_paths.keys())}); science image filters: ({','.join(data_file_paths_by_filter.keys())})')
         
+        # if dark noise corrector defined, check dark images have same exposure times as flats
+        valid, flat_exptime, dark_exptime = self._dark_corrector_is_valid()
+        if not valid:
+            print(f'[OPTICAM] ERROR: inconsistent exposure times between flat-field images and dark images. Flat-field exposure time: {flat_exptime} s; dark exposure time: {dark_exptime} s.')
+        
         ################################################### warnings ###################################################
         
         # check binnings match
-        flat_path = next(iter(self.data_paths.values()))[0]  # get the path to a random flat
-        flat_binning = self.instrument.get_binning(file_path=flat_path)
-        image_path = next(iter(data_file_paths_by_filter.values()))[0]  # get the path to a science image
+        flat_binning = self.instrument.get_binning(header=flat_header)
         science_binning = self.instrument.get_binning(file_path=image_path)
         if flat_binning != science_binning:
             warnings += 1
@@ -966,6 +1051,9 @@ class FlatFieldCorrector(Corrector):
         elif warnings > 1:
             print(f'[OPTICAM] FlatFieldCorrector triggered a warning during {warnings} checks. Warnings may be ignored provided their caveats are satisfied.')
         
+        if errors == 0:
+            self.passed_checks = True
+        
         if return_errors:
             return errors
 
@@ -988,15 +1076,19 @@ class FlatFieldCorrector(Corrector):
             A dictionary containing the paths to the flat-field images for each filter.
         """
         
-        filters, binnings = {}, {}
+        filters: Dict[Path, str] = {}
+        binnings: Dict[Path, str] = {}
+        exptimes: Dict[Path, float] = {}
         
         for file_path in file_paths:
             header = fits.getheader(file_path)
             filters[file_path] = self.instrument.get_filter(header=header)
             binnings[file_path] = self.instrument.get_binning(header=header)
+            exptimes[file_path] = float(header[self.instrument.exptime_kw])
         
         unique_filters = set(filters.values())
         unique_binnings = set(binnings.values())
+        unique_exptimes = set(exptimes.values())
         
         if len(unique_binnings) > 1:
             log_file(
@@ -1005,6 +1097,14 @@ class FlatFieldCorrector(Corrector):
                 file_contents=binnings,
                 )
             raise ValueError(f'[OPTICAM] Inconsistent binning detected in the flat-field images. Image binnings have been logged to {self.out_directory.joinpath('diag/binnings.json')}')
+        
+        if len(unique_exptimes) > 1:
+            log_file(
+                out_directory=self.out_directory,
+                file_name='exptimes.json',
+                file_contents=exptimes,
+                )
+            raise ValueError(f'[OPTICAM] Inconsistent exposure times detected in the flat-field images. Exposure times have been logged to {self.out_directory.joinpath('diag/exptimes.json')}')
         
         # get flats for each filter
         flats = {}
@@ -1018,6 +1118,33 @@ class FlatFieldCorrector(Corrector):
             print(f'[OPTICAM] {len(v)} {k} flat-field images.')
         
         return flats
+
+
+    def _dark_corrector_is_valid(self) -> Tuple[bool, float, float]:
+        """
+        Check that the dark images have the same exposure time as the flat-field images.
+        
+        Returns
+        -------
+        Tuple[bool, float, float]
+            If the exposure times are equal, returns `True, 0., 0.,`. Otherwise, returns `False, flat_exposure_time, 
+            dark_exposure_time`.
+        """
+        
+        if hasattr(self.dark_corrector, 'data_paths'):
+            
+            dark_path = next(iter(self.dark_corrector.data_paths.values()))[0]
+            dark_header = fits.getheader(dark_path)
+            dark_exptime = float(dark_header[self.instrument.exptime_kw])
+            
+            flat_path = next(iter(self.data_paths.values()))[0]
+            flat_header = fits.getheader(flat_path)
+            flat_exptime = float(flat_header[self.instrument.exptime_kw])
+            
+            if dark_exptime != flat_exptime:
+                return False, flat_exptime, dark_exptime
+        
+        return True, 0., 0.
 
 
 

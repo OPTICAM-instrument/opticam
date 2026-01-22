@@ -126,7 +126,6 @@ def get_data(
         data, dark_var = dark_corrector.correct(
             image=data,
             fltr=fltr,
-            bias_corrector=bias_corrector,
             dark_flux=instrument.get_dark_flux(file_path),
             )
     else:
@@ -138,7 +137,6 @@ def get_data(
         data, flat_var = flat_corrector.correct(
             image=data,
             fltr=fltr,
-            bias_corrector=bias_corrector,
             )
     else:
         flat_var = 0.
