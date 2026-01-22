@@ -364,6 +364,7 @@ def create_flats(
         # create fits file
         hdu = fits.PrimaryHDU(image)
         hdu.header["FILTER"] = fltr
+        hdu.header['EXPOSURE'] = 0.05
         hdu.header["BINNING"] = f'{binning_scale}x{binning_scale}'
         hdu.header["GAIN"] = 1.
         
