@@ -5,7 +5,7 @@ A Python package for reducing OPTICAM data.
 
 .. toctree:: 
    :maxdepth: 3
-   :caption: Contents:
+   :caption: Tutorials:
 
    tutorials/reduction
    tutorials/instruments
@@ -15,3 +15,10 @@ A Python package for reducing OPTICAM data.
    tutorials/finders
    tutorials/timing_methods
    tutorials/visualisation
+
+.. toctree:: 
+   :maxdepth: 3
+   :caption: Proofs:
+
+   tests/sextractor_comparison
+   tests/calibration_error_propagation
