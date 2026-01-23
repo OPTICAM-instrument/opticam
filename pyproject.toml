@@ -34,6 +34,7 @@ docs = [
     "jupyter >=1.1.1",
     "nbconvert >= 7.16.6",
     "nbsphinx >= 0.9",
+    "pdf2image == 1.17.0",
     "sphinx >= 8.1",
     "sphinx-autoapi >= 3.4",
     "sphinx-rtd-theme >= 3.0",
