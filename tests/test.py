@@ -1,114 +1,194 @@
 import os
+from pathlib import Path
+import shutil
 import tempfile
 import unittest
 
-import numpy as np
-from astropy.io import fits
+
+from nbconvert.preprocessors import ExecutePreprocessor
+import nbformat
 
 
-from opticam.background.global_background import DefaultBackground
-from opticam.background.local_background import DefaultLocalBackground
-from opticam.finders import DefaultFinder
-from opticam.utils.generate import generate_observations
-
-# TODO: add unit tests for instruments and correctors
+SAVE = os.getenv('SAVE_NOTEBOOKS') == '1'
+OUT_DIR = Path('docs/_executed')
 
 
 
 
-class TestBackground(unittest.TestCase):
+class NotebookTestCase(unittest.TestCase):
+    """
+    Base test case for running tutorial notebooks.
+    """
+
+    NOTEBOOK: Path | None = None
+    TIMEOUT = 300
+
+
+    def setUp(self) -> None:
+        """
+        Run notebooks in a temporary directory.
+        """
+        
+        self.tmp = tempfile.TemporaryDirectory()
+        self.workdir = Path(self.tmp.name)
+
+
+    def tearDown(self) -> None:
+        """
+        Delete the temporary directory contents.
+        """
+        
+        self.tmp.cleanup()
+
+
+    def run_notebook(self) -> None:
+        """
+        Run and then save the notebook.
+        """
+        
+        with self.NOTEBOOK.open() as file:
+            nb = nbformat.read(file, as_version=4)
+        
+        ep = ExecutePreprocessor(
+            timeout=self.TIMEOUT,
+            kernel_name='python3',
+            allow_errors=False,
+            )
+        
+        ep.preprocess(nb, {'metadata': {'path': str(self.workdir)}})
+        
+        # save notebook
+        if SAVE:
+            out = OUT_DIR / self.NOTEBOOK.name
+            if not out.parent.is_dir():
+                out.parent.mkdir(parents=True)
+            with out.open('w', encoding='utf-8') as file:
+                nbformat.write(nb, file)
+
+
+    def test_notebook_runs(self) -> None:
+        """
+        Notebook run test.
+        """
+        
+        if self.NOTEBOOK is None:
+            self.skipTest('abstract base class')
+        
+        self.run_notebook()
+
+
+
+
+class TestCalibrationErrorPropagation(NotebookTestCase):
+    """
+    Run the calibration error propagation notebook.
+    """
+
+    NOTEBOOK = Path('docs/tests/calibration_error_propagation.ipynb')
+
+
+
+
+class TestSExtractorComparison(NotebookTestCase):
+    """
+    Run the calibration error propagation notebook.
+    """
+
+    NOTEBOOK = Path('docs/tests/sextractor_comparison.ipynb')
+
+
+    def setUp(self) -> None:
+        """
+        Run notebooks in a temporary directory.
+        """
+        
+        super().setUp()
+        
+        # copy input files to temp dir
+        shutil.copytree('docs/tests/sextractor_comparison', self.workdir / 'sextractor_comparison')
+
+
+
+
+class TestCalibrations(NotebookTestCase):
+    """
+    Run the applying corrections tutorial.
+    """
     
-    def test_background(self):
-        """
-        Test the default background estimator.
-        """
-        
-        binning_scale = 4
-        
-        with tempfile.TemporaryDirectory() as temp_dir:
-            
-            dir_path = os.path.join(temp_dir, 'observations')
-            
-            if not os.path.isdir(dir_path):
-                generate_observations(dir_path, n_images=5, circular_aperture=False, binning_scale=binning_scale)
-            
-            bkg_estimator = DefaultBackground(2048 // binning_scale // 16)
-            
-            for im in os.listdir(dir_path):
-                    with fits.open(os.path.join(dir_path, im)) as hdul:
-                        image = np.array(hdul[0].data)
-                    
-                    bkg = bkg_estimator(image)
-                    
-                    self.assertTrue(np.allclose(bkg.background, 100, rtol = .05))
-                    self.assertTrue(np.allclose(bkg.background_rms, 10, rtol = .1))
+    NOTEBOOK = Path('docs/tutorials/applying_corrections.ipynb')
 
 
-class TestFinder(unittest.TestCase):
+
+
+class TestBackgrounds(NotebookTestCase):
+    """
+    Run the backgrounds tutorial.
+    """
     
-    def test_finder(self):
-        """
-        Test the source finder.
-        """
-        
-        binning_scale = 4
-        
-        with tempfile.TemporaryDirectory() as temp_dir:
-            
-            dir_path = os.path.join(temp_dir, 'observations')
-            
-            if not os.path.isdir(dir_path):
-                generate_observations(dir_path, n_images=5, circular_aperture=False, binning_scale=binning_scale)
-            
-            bkg_estimator = DefaultBackground(2048 // binning_scale // 16)
-            finder = DefaultFinder(128 // binning_scale**2)
-            
-            for im in os.listdir(dir_path):
-                with fits.open(os.path.join(dir_path, im)) as hdul:
-                    image = np.array(hdul[0].data)
-                
-                bkg = bkg_estimator(image)
-                tbl = finder(image - bkg.background, 5 * bkg.background_rms)
-                
-                self.assertTrue(len(tbl) == 6)
+    NOTEBOOK = Path('docs/tutorials/backgrounds.ipynb')
 
 
-class TestLocalBackground(unittest.TestCase):
+
+
+class TestFinders(NotebookTestCase):
+    """
+    Run the source finder tutorial.
+    """
     
-    def test_elliptical_local_background(self):
-        """
-        Test the local background estimator.
-        """
-        
-        binning_scale = 4
-        
-        with tempfile.TemporaryDirectory() as temp_dir:
-            
-            dir_path = os.path.join(temp_dir, 'observations')
-            
-            if not os.path.isdir(dir_path):
-                generate_observations(dir_path, n_images=5, circular_aperture=False)
-            
-            bkg_estimator = DefaultBackground(2048 // binning_scale // 16)
-            finder = DefaultFinder(128 // binning_scale**2)
-            
-            for im in os.listdir(dir_path):
-                with fits.open(os.path.join(dir_path, im)) as hdul:
-                    image = np.array(hdul[0].data)
-                
-                bkg = bkg_estimator(image)
-                tbl = finder(image - bkg.background, 5 * bkg.background_rms)
-                coords = np.array([tbl["xcentroid"], tbl["ycentroid"]]).T
-                local_bkg_estimator = DefaultLocalBackground()
-                
-                for i in range(len(coords)):
-                    local_bkg, local_bkg_error = local_bkg_estimator(
-                        image,
-                        coords[i],
-                        tbl['semimajor_sigma'][i].value,
-                        tbl['semiminor_sigma'][i].value,
-                        tbl['orientation'][i],
-                        )
-                    
-                    self.assertTrue(np.allclose(local_bkg, 100, rtol = 0.05))
-                    self.assertTrue(np.allclose(local_bkg_error, 10, rtol = 0.2))
+    NOTEBOOK = Path('docs/tutorials/finders.ipynb')
+
+
+
+
+class TestInstruments(NotebookTestCase):
+    """
+    Run the instruments tutorial.
+    """
+    
+    NOTEBOOK = Path('docs/tutorials/instruments.ipynb')
+
+
+
+
+class TestLocalBackgrounds(NotebookTestCase):
+    """
+    Run the local background tutorial.
+    """
+    
+    NOTEBOOK = Path('docs/tutorials/local_backgrounds.ipynb')
+
+
+
+
+class TestReduction(NotebookTestCase):
+    """
+    Run the reduction tutorial.
+    """
+    
+    NOTEBOOK = Path('docs/tutorials/reduction.ipynb')
+
+
+
+
+class TestTimingMethods(NotebookTestCase):
+    """
+    Run the timing methods tutorial.
+    """
+    
+    NOTEBOOK = Path('docs/tutorials/timing_methods.ipynb')
+
+
+
+
+class TestVisualisation(NotebookTestCase):
+    """
+    Run the visualisation tutorial.
+    """
+    
+    NOTEBOOK = Path('docs/tutorials/visualisation.ipynb')
+
+
+
+
+
+
