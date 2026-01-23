@@ -29,6 +29,15 @@ autodoc_typehints = 'description'
 templates_path = ['_templates']
 exclude_patterns = []
 
+nbsphinx_execute = 'never'
+
+EXECUTED = Path(__file__).parent.resolve() / '_executed'
+nbsphinx_notebook_dir = str(EXECUTED)
+
+nbsphinx_remove_cells = [
+    'remove-cell',
+    ]
+
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
