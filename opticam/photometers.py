@@ -741,68 +741,8 @@ class OptimalPhotometer(BasePhotometer):
             returned.
         """
         
-        def get_flux_and_error(
-            image: NDArray[np.float64],
-            bias_var: float | NDArray[np.float64],
-            dark_var: float | NDArray[np.float64],
-            flat_var: float | NDArray[np.float64],
-            background_rms: float | NDArray[np.float64],
-            read_noise: float,
-            position: NDArray[np.float64],
-            psf_params: Dict[str, float],
-            ) -> Tuple[float, float]:
-            """
-            Compute the optimal flux and its error.
-            
-            Parameters
-            ----------
-            image : NDArray[np.float64]
-                The background-subtracted image.
-            bias_var : float | NDArray
-                The bias correction variance term.
-            dark_var : float | NDArray
-                The dark noise correction variance term.
-            flat_var : float | NDArray
-                The flat-field correction variance term scaled by the square of the calibrated image.
-            background_rms : float | NDArray[np.float64]
-                The background RMS. May be a scalar value or an `NDArray` with the same shape as `image`.
-            read_noise : float
-                The instrument's read noise.
-            position : NDArray[np.float64]
-                The source position [x, y].
-            psf_params : Dict[str, float]
-                The PSF parameters.
-            
-            Returns
-            -------
-            Tuple[float, float]
-                The flux and its corresponding error.
-            """
-            
-            error = propagate_errors(
-                data=image,
-                bias_var=bias_var,
-                dark_var=dark_var,
-                flat_var=flat_var,
-                background_rms=background_rms,
-                read_noise=read_noise,
-                )
-            
-            weights, norm = get_optimal_weights(
-                var=error**2,
-                position=position,
-                psf_major=psf_params['semimajor_sigma'],
-                psf_minor=psf_params['semiminor_sigma'],
-                psf_orientation=psf_params['orientation'],
-                )
-            
-            flux = float(np.sum(image * weights) / norm)
-            flux_error = np.sqrt(1 / norm)
-            
-            return flux, flux_error
-        
         if self.local_background_estimator is None:
-            return get_flux_and_error(
+            return get_optimal_flux_and_error(
                 image=image,
                 bias_var=bias_var,
                 dark_var=dark_var,
@@ -822,7 +762,7 @@ class OptimalPhotometer(BasePhotometer):
                 psf_params['orientation'],
                 )
             
-            flux, flux_error = get_flux_and_error(
+            flux, flux_error = get_optimal_flux_and_error(
                 image=image - local_background,
                 bias_var=bias_var,
                 dark_var=dark_var,
@@ -885,6 +825,67 @@ def get_optimal_weights(
     normalisation = np.sum(psf**2 / var)
     
     return weights, normalisation
+
+
+def get_optimal_flux_and_error(
+    image: NDArray[np.float64],
+    bias_var: float | NDArray[np.float64],
+    dark_var: float | NDArray[np.float64],
+    flat_var: float | NDArray[np.float64],
+    background_rms: float | NDArray[np.float64],
+    read_noise: float,
+    position: NDArray[np.float64],
+    psf_params: Dict[str, float],
+    ) -> Tuple[float, float]:
+    """
+    Compute the optimal flux and its error.
+    
+    Parameters
+    ----------
+    image : NDArray[np.float64]
+        The background-subtracted image.
+    bias_var : float | NDArray
+        The bias correction variance term.
+    dark_var : float | NDArray
+        The dark noise correction variance term.
+    flat_var : float | NDArray
+        The flat-field correction variance term scaled by the square of the calibrated image.
+    background_rms : float | NDArray[np.float64]
+        The background RMS. May be a scalar value or an `NDArray` with the same shape as `image`.
+    read_noise : float
+        The instrument's read noise.
+    position : NDArray[np.float64]
+        The source position [x, y].
+    psf_params : Dict[str, float]
+        The PSF parameters.
+    
+    Returns
+    -------
+    Tuple[float, float]
+        The flux and its corresponding error.
+    """
+    
+    error = propagate_errors(
+        data=image,
+        bias_var=bias_var,
+        dark_var=dark_var,
+        flat_var=flat_var,
+        background_rms=background_rms,
+        read_noise=read_noise,
+        )
+    
+    weights, norm = get_optimal_weights(
+        var=error**2,
+        position=position,
+        psf_major=psf_params['semimajor_sigma'],
+        psf_minor=psf_params['semiminor_sigma'],
+        psf_orientation=psf_params['orientation'],
+        )
+    
+    flux = float(np.sum(image * weights) / norm)
+    flux_error = np.sqrt(1 / norm)
+    
+    return flux, flux_error
 
 
 def get_growth_curve(
