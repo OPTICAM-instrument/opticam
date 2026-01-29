@@ -3,7 +3,7 @@ from logging import Logger
 from multiprocessing import cpu_count
 from pathlib import Path
 import re
-from typing import Callable, Dict, List, Tuple
+from typing import Callable
 import warnings
 
 
@@ -14,7 +14,8 @@ from tqdm import tqdm
 
 from opticam.utils.constants import bar_format
 from opticam.utils.fits_handlers import get_header_info
-from opticam.utils.helpers import create_file_paths, sort_dict_by_filters
+from opticam.mef_slice import create_file_paths, MEFSlice
+from opticam.utils.helpers import sort_dict_by_filters
 from opticam.utils.logging import log_file
 from opticam.instruments import Instrument
 
@@ -30,44 +31,45 @@ def scan_data(
     return_output: bool = False,
     logger: Logger | None = None,
     number_of_processors = cpu_count() // 2,
-    ) -> None | Tuple[Dict[str, List[Path]], int, Dict[Path, float], List[Path], float]:
+    ) -> None | tuple[dict[str, list[MEFSlice]], int, dict[str, float], list[MEFSlice], float]:
     """
     Check that the data are self-consistent.
     
     Parameters
     ----------
     out_directory : Path | str
-        The directory path to which any output files will be saved.
+        The path to the directory in which output files will be saved.
     data_directory : Path | str
-        The directory path to the data.
+        The path to the directory containing the data.
     instrument : Instrument
-        The instrument.
+        The instrument that produced the data.
     barycenter : bool, optional
-        Whether to apply a Barycentric correction to the image time stamps, by default True.
+        Whether to apply a Barycentric correction to the image time stamps, by default `True`. Only relevant if
+        `return_output=True`.
     verbose : bool, optional
-        Whether to print any output info, by default True.
+        Whether to print any output info, by default `True`.
     return_output : bool, optional
-        Whether to return any output, by default False.
+        Whether to return any output, by default `False`.
     logger : Logger | None, optional
-        The logger, by default None.
+        The logger, by default `None`.
     number_of_processors : _type_, optional
         The number of processors to use, by default `cpu_count() // 2`.
     
     Returns
     -------
-    None | Tuple[Dict[str, List[Path]], int, Dict[Path, float], List[Path], float]
-        If `return_output=True`, the file paths, binning scale, Barycentric MJD dates, ignored files, and the reference
-        date are returned. Otherwise, nothing is returned.
+    None | tuple[dict[str, list[MEFSlice]], int, dict[str, float], list[MEFSlice], float]:
+        If `return_output=True`, the files grouped by camera, binning scale, Barycentric MJD dates, ignored files, and
+        the reference date are returned. Otherwise, nothing is returned.
     """
     
     out_directory = Path(out_directory)
     data_directory = Path(data_directory)
     
-    file_paths = create_file_paths(data_directory=data_directory)
+    files: list[MEFSlice] = create_file_paths(data_directory)
     
     # check instrument
     errors = instrument.run_checks(
-        file_paths[0],
+        files[0],
         return_errors=True,
         )
     if errors == 1:
@@ -75,17 +77,17 @@ def scan_data(
     elif errors > 1:
         raise ValueError(f'[OPTICAM] {errors} Instrument errors need to be resolved.')
     
-    camera_files: Dict[str, List[Path]] = {}  # {filter : [files]}
+    camera_files: dict[str, list[MEFSlice]] = {}  # {filter : [files]}
     
     # scan files
-    chunksize = max(1, len(file_paths) // 100)  # set chunksize to ~1% of the number of files
+    chunksize = max(1, len(files) // 100)  # set chunksize to ~1% of the number of files
     results = process_map(
         partial(
             get_header_info,
             instrument=instrument,
             barycenter=barycenter,
             ),
-        file_paths,
+        files,
         max_workers=number_of_processors,
         disable=not verbose,
         desc="[OPTICAM] Scanning data directory",
@@ -96,7 +98,7 @@ def scan_data(
     # unpack results
     binning, bmjds, filters, ignored_files = parse_header_results(
         results=results,
-        file_paths=file_paths,
+        files=files,
         out_directory=out_directory,
         logger=logger,
         )
@@ -104,17 +106,17 @@ def scan_data(
     # for each unique filter
     for fltr in set(filters.values()):
         camera_files.update({fltr: []})  # prepare dictionary entry
-        for file in file_paths:
+        for file in files:
             if file not in ignored_files:
-                if filters[file] == fltr:
+                if filters[file.key] == fltr:
                     camera_files[fltr].append(file)  # add file name to dict list
     
     # sort camera files so filters match camera order
-    camera_files: Dict[str, List[Path]] = sort_dict_by_filters(camera_files)
+    camera_files: dict[str, list[MEFSlice]] = sort_dict_by_filters(camera_files)
     
     # sort files by time
     for key in list(camera_files.keys()):
-        camera_files[key].sort(key=lambda x: bmjds[x])
+        camera_files[key].sort(key=lambda x: bmjds[x.key])  # use MEFSlice's key attribute to avoid unhashable error
     
     t_ref = min(list(bmjds.values()))  # get reference BMJD
     
@@ -133,20 +135,20 @@ def scan_data(
 
 
 def parse_header_results(
-    results: Tuple[List[float], List[float], List[str], List[str], List[float]],
-    file_paths: List[Path],
+    results: tuple[list[float], list[float], list[str], list[str], list[float]],
+    files: list[MEFSlice],
     out_directory: Path,
     logger: Logger | None,
-    ) -> Tuple[str, Dict[Path, float], Dict[Path, str], List[Path]]:
+    ) -> tuple[str, dict[str, float], dict[str, str], list[MEFSlice]]:
     """
     Parse the header info results.
     
     Parameters
     ----------
-    results : Tuple[List[float], List[float], List[str], List[str], List[float]]
+    results : tuple[list[float], list[float], list[str], list[str], list[float]]
         The header info results.
-    file_paths : List[Path]
-        The file paths.
+    files : list[MEFSlice]
+        The list of `MEFSlice` instances representing each image.
     out_directory : str
         The directory path to which any output files will be saved.
     logger : Logger | None
@@ -154,7 +156,7 @@ def parse_header_results(
     
     Returns
     -------
-    Tuple[str, Dict[Path, float], Dict[Path, str], List[Path]]
+    tuple[str, dict[str, float], dict[str, str], list[MEFSlice]]
         The binning scale, BMJD dates, filters, and ignored files.
     
     Raises
@@ -165,11 +167,11 @@ def parse_header_results(
         If more than one binning mode is detected.
     """
     
-    binnings: Dict[Path, str] = {}
-    bmjds: Dict[Path, float] = {}
-    exposures: Dict[Path, float] = {}
-    filters: Dict[Path, str] = {}
-    ignored_files: List[Path] = []
+    binnings: dict[str, str] = {}
+    bmjds: dict[str, float] = {}
+    exposures: dict[str, float] = {}
+    filters: dict[str, str] = {}
+    ignored_files: list[MEFSlice] = []
     
     # unpack results
     raw_bmjds, raw_exposures, raw_filters, raw_binnings = zip(*results)
@@ -177,12 +179,13 @@ def parse_header_results(
     # consolidate results
     for i in range(len(raw_bmjds)):
         if raw_bmjds[i] is not None:
-            binnings.update({file_paths[i]: raw_binnings[i]})
-            bmjds.update({file_paths[i]: raw_bmjds[i]})
-            exposures.update({file_paths[i]: raw_exposures[i]})
-            filters.update({file_paths[i]: raw_filters[i]})
+            key = files[i].key
+            binnings.update({key: raw_binnings[i]})
+            bmjds.update({key: raw_bmjds[i]})
+            exposures.update({key: raw_exposures[i]})
+            filters.update({key: raw_filters[i]})
         else:
-            ignored_files.append(file_paths[i])
+            ignored_files.append(files[i])
     
     # get unique filters
     unique_filters = set(filters.values())
@@ -205,14 +208,13 @@ def parse_header_results(
     
     # check for large differences in time
     for fltr in unique_filters:
-        fltr_bmjds = np.sort(np.array([bmjds[file] for file in file_paths if file in filters and filters[file] == fltr]))
-        files = [file for file in file_paths if file in filters and filters[file] == fltr]
+        fltr_bmjds = np.sort(np.array([bmjds[file.key] for file in files if file.key in filters and filters[file.key] == fltr]))
         t = fltr_bmjds - np.min(fltr_bmjds)
         dt = np.diff(t) * 86400
         if np.any(dt > 10 * np.median(dt)):
             indices = np.where(dt > 10 * np.median(dt))[0]
             for index in indices:
-                string = f"[OPTICAM] Large time gap detected between {files[index].split('/')[-1]} and {files[index + 1].split('/')[-1]} ({dt[index]:.3f} s compared to the median time difference of {np.median(dt):.3f} s). This may cause alignment issues. If so, consider moving all files after this gap to a separate directory."
+                string = f"[OPTICAM] Large time gap detected between {files[index].path.name} and {files[index + 1].path.name} ({dt[index]:.3f} s compared to the median time difference of {np.median(dt):.3f} s). This may cause alignment issues. If so, consider moving all files after this gap to a separate directory."
                 warnings.warn(string)
                 if logger:
                     logger.warning(string)
@@ -234,7 +236,7 @@ def parse_header_results(
 
 def data_checks_output(
     binning: str,
-    camera_files: Dict[str, List[Path]],
+    camera_files: dict[str, list[MEFSlice]],
     func: Callable,
     ) -> None:
     """
@@ -244,7 +246,7 @@ def data_checks_output(
     ----------
     binning : str
         The image binning.
-    camera_files : Dict[str, List[Path]]
+    camera_files : dict[str, list[MEFSlice]]
         The image files separated by filter.
     func : Callable
         The output function (i.e., `print` or `logger.info`)

@@ -4,7 +4,8 @@ from opticam.background.global_background import BaseBackground, DefaultBackgrou
 from opticam.background.local_background import BaseLocalBackground, DefaultLocalBackground
 from opticam.correctors import BiasCorrector, DarkNoiseCorrector, FlatFieldCorrector
 from opticam.finders import DefaultFinder
-from opticam.instruments import generate_instrument_json_template, Instrument, OPTICAM_MX, OPTICAM_MX_2022
+from opticam.instruments import generate_instrument_json_template, Instrument, OPTICAM_MX
+from opticam.mef_slice import MEFSlice
 from opticam.photometers import AperturePhotometer, OptimalPhotometer
 from opticam.reducer import Reducer
 from opticam.utils.generate import generate_flats, generate_observations, generate_gappy_observations

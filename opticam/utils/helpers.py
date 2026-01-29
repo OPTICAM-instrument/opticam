@@ -1,5 +1,3 @@
-import os
-from pathlib import Path
 from typing import Any, Dict, List
 import re
 
@@ -84,32 +82,6 @@ def sort_filters(
             return filters
     
     return sorted(filters, key=lambda x: filter_order[x[0]])
-
-
-def create_file_paths(
-    data_directory: Path,
-    ) -> List[Path]:
-    """
-    Given some directories, get the paths to all available FITS files.
-    
-    Parameters
-    ----------
-    data_directory : Path
-        The directory containing the FITS files.
-    
-    Returns
-    -------
-    List[Path]
-        The file paths.
-    """
-    
-    file_paths = []
-    file_names = os.listdir(data_directory)
-    for file_name in file_names:
-        if '.fit' in file_name:
-            file_paths.append(os.path.join(data_directory, file_name))
-    
-    return file_paths
 
 
 def propagate_errors(

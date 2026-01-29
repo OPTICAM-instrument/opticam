@@ -1,10 +1,7 @@
-from logging import Logger
 from pathlib import Path
-from typing import Dict, Tuple
 
 
 from astropy.io import fits
-from astropy.io.fits import Header
 from ccdproc import cosmicray_lacosmic
 import numpy as np
 from numpy.typing import NDArray
@@ -12,6 +9,7 @@ import os.path
 
 
 from opticam.correctors import BiasCorrector, DarkNoiseCorrector, FlatFieldCorrector
+from opticam.mef_slice import MEFSlice
 from opticam.utils.image_helpers import rebin_image
 from opticam.utils.time_helpers import apply_barycentric_correction
 from opticam.instruments import Instrument
@@ -20,23 +18,21 @@ from opticam.instruments import Instrument
 
 
 def get_header_info(
-    file: Path,
+    file: MEFSlice,
     instrument: Instrument,
     barycenter: bool,
-    ) -> Tuple[float | None, float | None, str | None, str | None]:
+    ) -> tuple[float, float, str, str]:
     """
-    Get the timestamp, exposure length, filter, binning, and dark current from a file header.
+    Get the timestamp, exposure length, filter, and binning of the file.
     
     Parameters
     ----------
-    file : str
-        The file path.
+    file : MEFSlice
+        The `MEFSlice` instance representing the file.
     instrument : Instrument
-        The instrument.
+        The instrument that created the file.
     barycenter : bool
         Whether to apply a Barycentric correction to the image's timestamp.
-    logger : Logger | None
-        The logger.
     
     Returns
     -------
@@ -44,17 +40,14 @@ def get_header_info(
         The timestamp, exposure length, filter, and binning of the image.
     """
     
-    binning = str(instrument.get_binning(file))
-    
-    header: Header = fits.getheader(file)
-    
+    header = file.get_header()
     exposure = float(header[instrument.exptime_kw])
     fltr = instrument.get_filter(header=header)
-    
-    timestamp = instrument.get_mjd(file)
+    binning = instrument.get_binning(header=header)
+    timestamp = instrument.get_mjd(header=header)
     
     if barycenter:
-        sky_coords = instrument.get_sky_coord(file)
+        sky_coords = instrument.get_sky_coord(header=header)
         timestamp = float(apply_barycentric_correction(
             timestamp,
             sky_coords,
@@ -65,24 +58,28 @@ def get_header_info(
 
 
 def get_data(
-    file_path: Path,
+    file: MEFSlice,
     instrument: Instrument,
     rebin_factor: int,
     remove_cosmic_rays: bool,
     bias_corrector: BiasCorrector | None = None,
     dark_corrector: DarkNoiseCorrector | None = None,
     flat_corrector: FlatFieldCorrector | None = None,
-    ) -> Tuple[NDArray[np.float64], float | NDArray[np.float64], float | NDArray[np.float64],
-               float | NDArray[np.float64]]:
+    ) -> tuple[
+        NDArray[np.float64],
+        float | NDArray[np.float64],
+        float | NDArray[np.float64],
+        float | NDArray[np.float64],
+        ]:
     """
-    Given the path to a FITS file, get the image data and perform and required corrections.
+    Get the (calibrated) image data from a file.
     
     Parameters
     ----------
-    file : Path
-        The path to the FITS file.
+    file : MEFSlice
+        The `MEFSlice` instance representing the file.
     instrument : Instrument
-        The instrument that produced the FITS file.
+        The instrument that created the file.
     rebin_factor : int
         The image rebinning factor.
     remove_cosmic_rays : bool
@@ -101,13 +98,7 @@ def get_data(
         the variance of that corrector is set to 0.
     """
     
-    try:
-        with fits.open(file_path) as hdul:
-            header: Header = hdul[0].header
-            data: NDArray[np.float64] = np.asarray(hdul[0].data, dtype=np.float64)
-    except Exception as e:
-        raise ValueError(f"[OPTICAM] Could not open {file_path} due to the following exception: {e}.")
-    
+    data, header = file.get_data_and_header()
     fltr = instrument.get_filter(header=header)
     
     ################################################# bias correction #################################################
@@ -126,7 +117,7 @@ def get_data(
         data, dark_var = dark_corrector.correct(
             image=data,
             fltr=fltr,
-            dark_flux=instrument.get_dark_flux(file_path),
+            dark_flux=instrument.get_dark_flux(header=header),
             )
     else:
         dark_var = 0.
@@ -155,27 +146,26 @@ def get_data(
 
 
 def save_stacked_images(
-    stacked_images: Dict[str, NDArray],
+    stacked_images: dict[str, NDArray],
     out_directory: Path,
     overwrite: bool,
     ) -> None:
     """
-    Save the stacked images to a compressed FITS cube.
+    Save the stacked images to a compressed multi-extension FITS file.
     
     Parameters
     ----------
-    stacked_images : Dict[str, NDArray]
-        The stacked images (filter: stacked image).
+    stacked_images : dict[str, NDArray]
+        The stacked images {filter: stacked image}.
     out_directory : Path
-        The path to the directory in which the stacked images are saved.
+        The path to the directory in which the stacked images will be saved.
     overwrite : bool
-        Whether to overwrite existing stacked images.
+        Whether to overwrite the file if it already exists.
     """
     
     hdr = fits.Header()
     hdr['COMMENT'] = 'This FITS file contains stacked images for each filter.'
-    empty_primary = fits.PrimaryHDU(header=hdr)
-    hdul = fits.HDUList([empty_primary])
+    hdul = fits.HDUList([fits.PrimaryHDU(header=hdr)])
     
     for fltr, img in stacked_images.items():
         hdr = fits.Header()
@@ -191,18 +181,18 @@ def save_stacked_images(
 
 def get_stacked_images(
     out_directory: Path,
-    ) -> Dict[str, NDArray]:
+    ) -> dict[str, NDArray[np.float64]]:
     """
-    Unpacked the stacked catalog images from out_directory/cat.
+    Unpacked the stacked catalog images from `out_directory/cat/stacked_images.fits.gz`.
     
     Parameters
     ----------
     out_directory : Path
-        The directory path to the reduction output.
+        The path to the directory containing the stacked images.
     
     Returns
     -------
-    Dict[str, NDArray]
+    Dict[str, NDArray[np.float64]]
         The stacked images {filter: image}.
     """
     
@@ -212,7 +202,7 @@ def get_stacked_images(
             if 'FILTER' not in hdu.header:
                 continue
             fltr = hdu.header['FILTER']
-            stacked_images[fltr] = np.asarray(hdu.data)
+            stacked_images[fltr] = np.asarray(hdu.data, dtype=np.float64)
     
     return stacked_images
 

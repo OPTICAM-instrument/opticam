@@ -1,7 +1,7 @@
 from abc import ABC
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 
 from astropy.coordinates import EarthLocation, SkyCoord
@@ -11,6 +11,9 @@ from astropy.time import Time
 import astropy.units as u
 import json
 import numpy as np
+
+
+from opticam.mef_slice import MEFSlice
 
 
 
@@ -64,7 +67,7 @@ class Instrument(ABC):
 
     def run_checks(
         self,
-        file_path: Path | str,
+        file: MEFSlice | Path,
         return_errors: bool = False,
         ) -> None | int:
         """
@@ -72,8 +75,9 @@ class Instrument(ABC):
         
         Parameters
         ----------
-        file_path : Path | str
-            The path to the FITS file.
+        file : MEFSlice | Path
+            The file to use for checking the instrument. If a `Path` or `str` instance is specified, the first HDU of
+            the corresponding FITS file is used.
         return_errors : bool, optional
             Whether to return the number of errors raised, by default `False`.
         
@@ -88,12 +92,12 @@ class Instrument(ABC):
             If the header of the file could not be read.
         """
         
-        try:
-            header = fits.getheader(file_path)
-        except Exception as e:
-            raise ValueError(f'[OPTICAM] Could not get header of {file_path} due to the following exception: {e}.')
+        if isinstance(file, Path) or isinstance(file, str):
+            file = MEFSlice(path=Path(file).resolve(), ext=0)
         
+        header = file.get_header()
         keys = list(header.keys())
+        
         errors = 0
         warnings = 0
         
@@ -101,11 +105,11 @@ class Instrument(ABC):
         
         if self.exptime_kw not in keys:
             errors += 1
-            print(f'[OPTICAM] ERROR: {self.__class__.__name__}.exptime_kw ({self.exptime_kw}) is not a valid header keyword for file {file_path}.')
+            print(f'[OPTICAM] ERROR: {self.__class__.__name__}.exptime_kw ({self.exptime_kw}) is not a valid header keyword for file {file.path} extension {file.ext}.')
         
         if self.filter_kw not in keys:
             errors += 1
-            print(f'[OPTICAM] ERROR: {self.__class__.__name__}.filter_kw ({self.filter_kw}) is not a valid header keyword for file {file_path}.')
+            print(f'[OPTICAM] ERROR: {self.__class__.__name__}.filter_kw ({self.filter_kw}) is not a valid header keyword for file {file.path} extension {file.ext}.')
         else:
             try:
                 fltr = self.get_filter(header=header)
@@ -116,11 +120,11 @@ class Instrument(ABC):
         
         if self.gain_kw not in keys:
             errors += 1
-            print(f'[OPTICAM] ERROR: {self.__class__.__name__}.gain_kw ({self.gain_kw}) is not a valid header keyword for file {file_path}.')
+            print(f'[OPTICAM] ERROR: {self.__class__.__name__}.gain_kw ({self.gain_kw}) is not a valid header keyword for file {file.path} extension {file.ext}.')
         
         if self.dateobs_kw not in keys:
             errors += 1
-            print(f'[OPTICAM] ERROR: {self.__class__.__name__}.dateobs_kw ({self.dateobs_kw}) is not a valid header keyword for file {file_path}.')
+            print(f'[OPTICAM] ERROR: {self.__class__.__name__}.dateobs_kw ({self.dateobs_kw}) is not a valid header keyword for file {file.path} extension {file.ext}.')
         
         if self.filter_kw in keys:
             try:
@@ -130,13 +134,13 @@ class Instrument(ABC):
                 print(f'[OPTICAM] ERROR: {self.__class__.__name__}.pixel_scales does not contain a corresponding value for the filter {self.get_filter(header=header)}.')
         
         try:
-            self.get_binning(file_path=file_path)
+            self.get_binning(header=header)
         except Exception as e:
             errors += 1
-            print(f'[OPTICAM] ERROR: failed to read image binning for file {file_path} due to the exception {e}. This is either due to an incorrect value being passed to binning_kw and/or your images do not contain a binning keyword. In the latter case, you will need to define a custom instrument with a custom get_binning() method. See (TODO: link) for details.')
+            print(f'[OPTICAM] ERROR: failed to read image binning for file {file.path} extension {file.ext} due to the exception {e} This is either due to an incorrect value being passed to binning_kw and/or your images do not contain a binning keyword. In the latter case, you will need to define a custom instrument with a custom get_binning() method. See (TODO: link) for details.')
         
         try:
-            Time(self.get_mjd(file_path=file_path), format='mjd')
+            Time(self.get_mjd(header=header), format='mjd')
         except Exception as e:
             errors += 1
             print(f'[OPTICAM] ERROR: Failed to parse the MJD of the image due the following exception: {e}. This is likely due to an incorrect value being passed to dateobs_kw and/or your images do not give timestamps in FITS format. In the latter case, you will need to define a custom instrument with a custom get_mjd() method. See (TODO: link) for details.')
@@ -148,21 +152,21 @@ class Instrument(ABC):
         
         if self.ra_kw not in keys:
             warnings += 1
-            print(f'[OPTICAM] WARNING: {self.__class__.__name__}.ra_kw ({self.ra_kw}) is not a valid header keyword for file {file_path}.')
+            print(f'[OPTICAM] WARNING: {self.__class__.__name__}.ra_kw ({self.ra_kw}) is not a valid header keyword for file {file.path} extension {file.ext}.')
         
         if self.dec_kw not in keys:
             warnings += 1
-            print(f'[OPTICAM] WARNING: {self.__class__.__name__}.dec_kw ({self.dec_kw}) is not a valid header keyword for file {file_path}.')
+            print(f'[OPTICAM] WARNING: {self.__class__.__name__}.dec_kw ({self.dec_kw}) is not a valid header keyword for file {file.path} extension {file.ext}.')
         
         try:
-            self.get_sky_coord(file_path=file_path)
+            self.get_sky_coord(header=header)
         except Exception as e:
             warnings += 1
             print(f'[OPTICAM] Warning: {self.__class__.__name__}.get_sky_coord() failed due to the following exception: {e}. Barycentric correction will not be possible. If this is a mistake, check the specified RA and DEC keywords ({self.ra_kw} and {self.dec_kw}, respectively) are present in your image headers. If they are present, then they are likely in an unrecognised format. In this case, you will need to define a custom instrument with a custom get_sky_coord() method. See (TODO: link) for details.')
         
         if self.dark_curr_kw not in keys:
             warnings += 1
-            print(f'[OPTICAM] WARNING: {self.__class__.__name__}.dark_curr_kw ({self.dark_curr_kw}) is not a valid header keyword for file {file_path}. If no dark current is listed in the image headers, you will need to use a `opticam.DarkNoiseCorrector` instance to correct for dark noise. See (TODO: link) for details.')
+            print(f'[OPTICAM] WARNING: {self.__class__.__name__}.dark_curr_kw ({self.dark_curr_kw}) is not a valid header keyword for file {file.path} extension {file.ext}. If no dark current is listed in the image headers, you will need to use a `opticam.DarkNoiseCorrector` instance to correct for dark noise. See (TODO: link) for details.')
         
         ################################################### summary ###################################################
         
@@ -188,7 +192,7 @@ class Instrument(ABC):
 
     def get_mjd(
         self,
-        file_path: Path | str | None = None,
+        file: MEFSlice | None = None,
         header: Header | None = None,
         ) -> float:
         """
@@ -196,10 +200,11 @@ class Instrument(ABC):
         
         Parameters
         ----------
-        file_path : Path | str | None, optional
-            The path to the FITS file, by default `None`. If `None`, a header must be passed to `header` instead.
+        file : MEFSlice | None, optional
+            The `MEFSlice` instance corresponding to the file, by default `None`. If `None`, a `Header` must be passed to
+            `header` instead.
         header : Header, optional
-            The header of the FITS file, by default `None`. If `None`, a file path must be passed to `file_path` instead.
+            The header of the FITS file, by default `None`. If `None`, a `MEFSlice` must be passed to `file` instead.
         
         Returns
         -------
@@ -207,8 +212,8 @@ class Instrument(ABC):
             The local MJD of the image.
         """
         
-        if header is None:
-            header: Header = fits.getheader(file_path)
+        if file is not None:
+            header: Header = file.get_header()
         
         timestamp = str(header[self.dateobs_kw])
         mjd = float(np.asarray(Time(timestamp, format="fits").mjd))
@@ -218,7 +223,7 @@ class Instrument(ABC):
 
     def get_sky_coord(
         self,
-        file_path: Path | str | None = None,
+        file: MEFSlice | None = None,
         header: Header | None = None,
         ) -> SkyCoord:
         """
@@ -226,10 +231,11 @@ class Instrument(ABC):
         
         Parameters
         ----------
-        file_path : Path | str | None, optional
-            The path to the FITS file, by default `None`. If `None`, a header must be passed to `header` instead.
+        file : MEFSlice | None, optional
+            The `MEFSlice` instance corresponding to the file, by default `None`. If `None`, a `Header` must be passed to
+            `header` instead.
         header : Header, optional
-            The header of the FITS file, by default `None`. If `None`, a file path must be passed to `file_path` instead.
+            The header of the FITS file, by default `None`. If `None`, a `MEFSlice` must be passed to `file` instead.
         
         Returns
         -------
@@ -237,8 +243,8 @@ class Instrument(ABC):
             The sky coordinates of the image.
         """
         
-        if header is None:
-            header: Header = fits.getheader(file_path)
+        if file is not None:
+            header = file.get_header()
         
         sky_coord =  SkyCoord(
             header[self.ra_kw],
@@ -251,7 +257,7 @@ class Instrument(ABC):
 
     def get_dark_flux(
         self,
-        file_path: Path | str | None = None,
+        file: MEFSlice | None = None,
         header: Header | None = None,
         ) -> float | None:
         """
@@ -260,10 +266,11 @@ class Instrument(ABC):
         
         Parameters
         ----------
-        file_path : Path | str | None, optional
-            The path to the FITS file, by default `None`. If `None`, a header must be passed to `header` instead.
+        file : MEFSlice | None, optional
+            The `MEFSlice` instance corresponding to the file, by default `None`. If `None`, a `Header` must be passed to
+            `header` instead.
         header : Header, optional
-            The header of the FITS file, by default `None`. If `None`, a file path must be passed to `file_path` instead.
+            The header of the FITS file, by default `None`. If `None`, a `MEFSlice` must be passed to `file` instead.
         
         Returns
         -------
@@ -271,8 +278,8 @@ class Instrument(ABC):
             The dark flux in the image.
         """
         
-        if header is None:
-            header: Header = fits.getheader(file_path)
+        if file is not None:
+            header = file.get_header()
         
         try:
             dark_curr = float(header[self.dark_curr_kw])
@@ -286,7 +293,7 @@ class Instrument(ABC):
 
     def get_binning(
         self,
-        file_path: Path | str | None = None,
+        file: MEFSlice | None = None,
         header: Header | None = None,
         ) -> str:
         """
@@ -294,10 +301,11 @@ class Instrument(ABC):
         
         Parameters
         ----------
-        file_path : Path | str | None, optional
-            The path to the FITS file, by default `None`. If `None`, a header must be passed to `header` instead.
+        file : MEFSlice | None, optional
+            The `MEFSlice` instance corresponding to the file, by default `None`. If `None`, a `Header` must be passed to
+            `header` instead.
         header : Header, optional
-            The header of the FITS file, by default `None`. If `None`, a file path must be passed to `file_path` instead.
+            The header of the FITS file, by default `None`. If `None`, a `MEFSlice` must be passed to `file` instead.
         
         Returns
         -------
@@ -305,15 +313,15 @@ class Instrument(ABC):
             The binning of the image.
         """
         
-        if header is None:
-            header: Header = fits.getheader(file_path)
+        if file is not None:
+            header: Header = file.get_header()
         
         return header[self.binning_kw]
 
 
     def get_filter(
         self,
-        file_path: Path | str | None = None,
+        file: MEFSlice | None = None,
         header: Header | None = None,
         ) -> str:
         """
@@ -321,10 +329,11 @@ class Instrument(ABC):
         
         Parameters
         ----------
-        file_path : Path | str | None, optional
-            The path to the FITS file, by default `None`. If `None`, a header must be passed to `header` instead.
+        file : MEFSlice | None, optional
+            The `MEFSlice` instance corresponding to the file, by default `None`. If `None`, a `Header` must be passed to
+            `header` instead.
         header : Header, optional
-            The header of the FITS file, by default `None`. If `None`, a file path must be passed to `file_path` instead.
+            The header of the FITS file, by default `None`. If `None`, a `MEFSlice` must be passed to `file` instead.
         
         Returns
         -------
@@ -332,8 +341,8 @@ class Instrument(ABC):
             The filter of the image.
         """
         
-        if header is None:
-            header: Header = fits.getheader(file_path)
+        if file is not None:
+            header: Header = file.get_header()
         
         return header[self.filter_kw]
 
@@ -564,19 +573,26 @@ class OPTICAM_MX(Instrument):
 
     def get_mjd(
         self,
-        file_path: Path | str | None = None,
+        file: MEFSlice | None = None,
         header: Header | None = None,
         ) -> float:
         
-        if header is None:
-            header: Header = fits.getheader(file_path)
+        if file is not None:
+            header = file.get_header()
         
+        # get DATE-OBS in FITS format
         instrument_time = str(header[self.dateobs_kw])
         date, time = instrument_time.split(' ')
-        fits_time = f'{date}T{time}'
-        mjd = float(np.asarray(Time(fits_time, format="fits").mjd))
+        obs_time = Time(f'{date}T{time}', format="fits")
         
-        return mjd
+        # get exposure time (in seconds)
+        exposure = float(header[self.exptime_kw]) * u.s
+        
+        # TODO: check if this should be + or -
+        # shift DATE-OBS to mid-exposure
+        mjd = np.asarray((obs_time + exposure / 2).mjd)
+        
+        return float(mjd)
 
 
 
@@ -589,32 +605,6 @@ class OPTICAM_MX_UNKNOWN(OPTICAM_MX):
         self,
         ):
         super().__init__(dateobs_kw='GPSTIME')
-
-
-
-
-# TODO: check when this is needed
-class OPTICAM_MX_2022(OPTICAM_MX):
-    """
-    Legacy OPTICAM-MX instrument. For use with OPTICAM-MX data taken in 2022. For OPTICAM-MX observations taken after
-    2022, use `OPTICAM_MX` instead.
-    """
-
-
-    def get_mjd(
-        self,
-        file_path: Path | str | None = None,
-        header: Header | None = None,
-        ) -> float:
-        
-        if header is None:
-            header: Header = fits.getheader(file_path)
-        
-        date = str(header['DATE-OBS'])
-        time = str(header['UT'])
-        mjd = float(np.asarray(Time(f'{date}T{time}', format='fits').mjd))
-        
-        return mjd
 
 
 

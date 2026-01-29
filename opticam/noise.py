@@ -12,6 +12,7 @@ from opticam.correctors import DarkNoiseCorrector
 from opticam.instruments import Instrument
 from opticam.photometers import AperturePhotometer
 from opticam.utils.constants import counts_to_mag_factor
+from opticam.mef_slice import MEFSlice
 from opticam.utils.fits_handlers import get_data
 
 
@@ -191,7 +192,7 @@ def snr_stderr(
 
 
 def get_noise_params(
-    file_path: Path,
+    file: MEFSlice,
     catalog: QTable,
     background: BaseBackground | Callable,
     psf_params: Dict[str, float],
@@ -203,8 +204,8 @@ def get_noise_params(
     
     Parameters
     ----------
-    file_path : Path
-        The path to the science image.
+    file : MEFSlice
+        The science image file.
     catalog : QTable
         The source catalog corresponding to the science image.
     background : BaseBackground | Callable
@@ -225,7 +226,7 @@ def get_noise_params(
     coords = np.asarray([catalog['xcentroid'], catalog['ycentroid']]).T
     
     img = get_data(
-        file_path=file_path,
+        file=file,
         instrument=instrument,
         dark_corrector=dark_corrector,
         flat_corrector=None,
@@ -234,11 +235,12 @@ def get_noise_params(
         )[0]
     
     # get (median) dark flux
-    fltr = instrument.get_filter(file_path)
+    header = file.get_header()
+    fltr = instrument.get_filter(header=header)
     if fltr in dark_corrector.master_images.keys():
         dark_var = dark_corrector.master_variances[fltr]
     else:
-        dark_var = instrument.get_dark_flux(file_path)
+        dark_var = instrument.get_dark_flux(header=header)
     
     # global background
     bkg = background(img)
@@ -275,7 +277,7 @@ def get_noise_params(
 
 
 def get_snrs(
-    file_path: Path,
+    file: MEFSlice,
     background: BaseBackground | Callable,
     catalog: QTable,
     psf_params: Dict[str, float],
@@ -287,8 +289,8 @@ def get_snrs(
     
     Parameters
     ----------
-    file_path : Path
-        The path to the science image.
+    file : MEFSlice
+        The science image file.
     background : BaseBackground | Callable
         The background estimator.
     catalog : QTable
@@ -307,7 +309,7 @@ def get_snrs(
     """
     
     source_ids, fluxes, flux_errs, N_pix, n_sky, dark_flux = get_noise_params(
-        file_path=file_path,
+        file=file,
         catalog=catalog,
         background=background,
         psf_params=psf_params,
@@ -327,7 +329,7 @@ def get_snrs(
 
 
 def characterise_noise(
-    file_path: Path,
+    file: MEFSlice,
     background: BaseBackground | Callable,
     catalog: QTable,
     psf_params: Dict[str, float],
@@ -340,8 +342,8 @@ def characterise_noise(
     
     Parameters
     ----------
-    file_path : Path
-        The file path to the science image.
+    file : MEFSlice
+        The science image file.
     background : BaseBackground | Callable
         The background estimator.
     catalog : QTable
@@ -360,7 +362,7 @@ def characterise_noise(
     """
     
     source_ids, fluxes, flux_errs, N_pix, n_sky, dark_flux = get_noise_params(
-        file_path=file_path,
+        file=file,
         catalog=catalog,
         background=background,
         psf_params=psf_params,

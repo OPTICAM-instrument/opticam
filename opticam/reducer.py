@@ -4,7 +4,7 @@ import logging
 from multiprocessing import cpu_count
 import os
 from pathlib import Path
-from typing import Callable, Dict, List, Literal, Tuple
+from typing import Callable, Literal
 
 
 from astroalign import find_transform
@@ -28,6 +28,7 @@ from opticam.photometers import AperturePhotometer, BasePhotometer
 from opticam.utils.batching import get_batches, get_batch_size
 from opticam.utils.constants import bar_format
 from opticam.utils.data_checks import scan_data
+from opticam.mef_slice import MEFSlice
 from opticam.utils.fits_handlers import get_data, get_stacked_images, save_stacked_images
 from opticam.plotting.gifs import compile_gif, create_gif_frame
 from opticam.utils.logging import recursive_log, log_psf_params
@@ -39,7 +40,7 @@ from opticam.plotting.plots import plot_backgrounds, plot_background_meshes, plo
 
 class Reducer:
     """
-    Class for reducing astronomical CCD data.
+    Class for reducing astronomical images.
     """
 
 
@@ -70,10 +71,10 @@ class Reducer:
         out_directory : Path | str
             The path to the directory to save the output files.
         data_directory : Path | str
-            The path to the directory containing the data.
+            The path to the directory containing the data. Data may be single- and/or multi-extension FITS files.
         aperture_selector : Callable, optional
             The aperture selector, by default `np.median`. This function is used to select the aperture size for
-            photometry. If a callable is provided, it should take a list of source sizes (`List[float]`) as input and
+            photometry. If a callable is provided, it should take a list of source sizes (`list[float]`) as input and
             return a single value.
         background : BaseBackground | None, optional
             The background calculator, by default `None`. If `None`, the default background calculator is used. If a
@@ -135,9 +136,6 @@ class Reducer:
             if self.verbose:
                 print(f"[OPTICAM] {self.out_directory} created.")
         
-        ########################################### out_directory ###########################################
-        
-        self.instrument = instrument
         
         ########################################### logger ###########################################
         
@@ -168,8 +166,9 @@ class Reducer:
         
         ########################################### input params ###########################################
         
-        # set some useful parameters
+        self.data_directory = Path(data_directory)
         self.rebin_factor = rebin_factor
+        self.instrument = instrument
         self.aperture_selector = aperture_selector
         self.threshold = threshold
         self.remove_cosmic_rays = remove_cosmic_rays
@@ -179,17 +178,15 @@ class Reducer:
         
         ########################################### check input data ###########################################
         
-        self.data_directory = Path(data_directory)
-        
         self.camera_files, self.binning_scale, self.bmjds, self.ignored_files, self.t_ref = scan_data(
                 data_directory=self.data_directory,
-                out_directory=out_directory,
-                instrument=instrument,
+                out_directory=self.out_directory,
+                instrument=self.instrument,
                 barycenter=self.barycenter,
-                verbose=verbose,
+                verbose=self.verbose,
                 return_output=True,
                 logger=self.logger,
-                number_of_processors=number_of_processors,
+                number_of_processors=self.number_of_processors,
                 )
         
         ########################################### correctors ###########################################
@@ -197,7 +194,7 @@ class Reducer:
         self.bias_corrector = bias_corrector
         if self.bias_corrector is not None:
             errors = self.bias_corrector.run_checks(
-                data_file_paths_by_filter=self.camera_files,
+                data_files_by_filter=self.camera_files,
                 return_errors=True,
                 )
             if errors == 1:
@@ -208,7 +205,7 @@ class Reducer:
         self.dark_corrector = dark_corrector
         if self.dark_corrector is not None:
             errors = self.dark_corrector.run_checks(
-                data_file_paths_by_filter=self.camera_files,
+                data_files_by_filter=self.camera_files,
                 return_errors=True,
                 )
             if errors == 1:
@@ -219,7 +216,7 @@ class Reducer:
         self.flat_corrector = flat_corrector
         if self.flat_corrector is not None:
             errors = self.flat_corrector.run_checks(
-                data_file_paths_by_filter=self.camera_files,
+                data_files_by_filter=self.camera_files,
                 return_errors=True,
                 )
             if errors == 1:
@@ -287,7 +284,7 @@ class Reducer:
         
         self.transforms = {}  # define transforms as empty dictionary
         self.unaligned_files = []  # define unaligned files as empty list
-        self.catalogs : Dict[str, QTable] = {}  # define catalogs as empty dictionary
+        self.catalogs : dict[str, QTable] = {}  # define catalogs as empty dictionary
         self.psf_params = {}  # define PSF parameters as empty dictionary
         
         ########################################### read transforms ###########################################
@@ -337,7 +334,7 @@ class Reducer:
         n_alignment_sources: int = 15,
         transform_type: Literal['affine', 'translation'] = 'affine',
         rotation_limit: float | None = None,
-        translation_limit: float | int | List[float | int] | None = None,
+        translation_limit: float | int | list[float | int] | None = None,
         scale_limit: float | None = None,
         overwrite: bool = False,
         ) -> None:
@@ -362,7 +359,7 @@ class Reducer:
             The maximum rotation limit (in degrees) for affine transformations, by default `None` (no limit).
         scale_limit : float, optional
             The maximum scale limit for affine transformations, by default `None` (no limit).
-        translation_limit : float | int | List[float | int] | None, optional
+        translation_limit : float | int | list[float | int] | None, optional
             The maximum translation limit for both types of transformations, by default `None` (no limit). Can be a
             scalar value that applies to both x- and y-translations, or an iterable where the first value defines the
             x-translation limit and the second value defines the y-translation limit.
@@ -405,7 +402,7 @@ class Reducer:
             
             # get reference image
             reference_image = get_data(
-                file_path=self.reference_files[fltr],
+                file=self.reference_files[fltr],
                 instrument=self.instrument,
                 bias_corrector=self.bias_corrector,
                 dark_corrector=self.dark_corrector,
@@ -551,23 +548,23 @@ class Reducer:
 
     def _align_batch(
         self,
-        batch: List[Path],
-        reference_image_shape: Tuple[int],
+        batch: list[MEFSlice],
+        reference_image_shape: tuple[int],
         reference_coords: NDArray,
         transform_type: Literal['affine', 'translation'],
         rotation_limit: float | None,
         scale_limit: float | None,
-        translation_limit: List[float] | None,
+        translation_limit: list[float] | None,
         n_alignment_sources: int,
-        ) -> Tuple[NDArray[np.float64], Dict[Path, List[float]], Dict[Path, Dict[str, float]]]:
+        ) -> tuple[NDArray[np.float64], dict[str, list[float]], dict[str, dict[str, float]]]:
         """
         Align a batch of images with respect to some reference coordinates.
         
         Parameters
         ----------
-        batch: List[Path]
-            The file path.
-        reference_image_shape : Tuple[int]
+        batch: list[MEFSlice]
+            The files.
+        reference_image_shape : tuple[int]
             The reference image's shape.
         reference_coords : NDArray
             The source coordinates in the reference image.
@@ -577,24 +574,24 @@ class Reducer:
             The maximum rotation limit (in degrees) for image alignment.
         scale_limit : float | None
             The maximum scaling limit for image alignment.
-        translation_limit : List[float] | None
+        translation_limit : list[float] | None
             The maximum translation limit for image alignment.
         n_alignment_sources : int
             The (maximum) number of sources to use for image alignment.
         
         Returns
         -------
-        Tuple[NDArray[np.float64], Dict[Path, List[float]], Dict[Path, Dict[str, float]]]
+        tuple[NDArray[np.float64], dict[str, list[float]], dict[str, dict[str, float]]]
             The stacked image, transforms, and background results.
         """
         
         stacked_image = np.zeros(reference_image_shape)  # create empty stacked image
-        transforms: Dict[Path, List[float]] = {}
-        bkg_dict: Dict[Path, Dict[str, float]] = {}
+        transforms: dict[str, list[float]] = {}
+        bkg_dict: dict[str, dict[str, float]] = {}
         
-        for file_path in batch:
+        for file in batch:
             data = get_data(
-                file_path=file_path,
+                file=file,
                 instrument=self.instrument,
                 bias_corrector=self.bias_corrector,
                 dark_corrector=self.dark_corrector,
@@ -615,11 +612,11 @@ class Reducer:
                     bkg=bkg,
                     )
             except Exception as e:
-                self.logger.info(f'[OPTICAM] No sources detected in {file_path}: {e}.')
+                self.logger.info(f'[OPTICAM] No sources detected in {file.path} extension {file.ext}: {e}')
                 continue
             
             if len(coords) < n_alignment_sources and transform_type == 'translation':
-                self.logger.info(f'[OPTICAM] {len(coords)} sources detected in {file_path} but n_alignment_sources={n_alignment_sources} and transform_type="translation". Skipping. To attempt to align images in which fewer than n_alignment_sources are detected, try transform_type="affine".')
+                self.logger.info(f'[OPTICAM] {len(coords)} sources detected in {file.path} extension {file.ext} but n_alignment_sources={n_alignment_sources} and transform_type="translation". Skipping. To attempt to align images in which fewer than n_alignment_sources are detected, try transform_type="affine".')
                 continue
             
             if transform_type == 'translation':
@@ -637,12 +634,12 @@ class Reducer:
                         max_control_points=n_alignment_sources,
                         )[0]
                 except Exception as e:
-                    self.logger.info(f'[OPTICAM] Could not align {file_path} due to the following exception: {e}. Skipping.')
+                    self.logger.info(f'[OPTICAM] Could not align {file.path} extension {file.ext} due to the following exception: {e}. Skipping.')
                     continue
             
             # validate transform
             if not self._valid_transform(
-                file=file_path,
+                file=file,
                 transform=transform,
                 rotation_limit=rotation_limit,
                 scale_limit=scale_limit,
@@ -650,8 +647,8 @@ class Reducer:
                 ):
                 continue
             
-            transforms[file_path] = transform.params.tolist()  # type: ignore
-            bkg_dict[file_path] = {
+            transforms[file.key] = transform.params.tolist()  # type: ignore
+            bkg_dict[file.key] = {
                 'Median': bkg.background_median,
                 'RMS': bkg.background_rms_median,
                 }
@@ -673,18 +670,18 @@ class Reducer:
 
     def _valid_transform(
         self,
-        file: Path,
+        file: MEFSlice,
         transform: SimilarityTransform,
         rotation_limit: float | None,
         scale_limit: float | None,
-        translation_limit: List[float] | None,
+        translation_limit: list[float] | None,
         ) -> bool:
         """
         Find whether a transform is valid given some transform limits.
         
         Parameters
         ----------
-        file : Path
+        file : MEFSlice
             The path to the file being transformed.
         transform : SimilarityTransform
             The transform.
@@ -692,7 +689,7 @@ class Reducer:
             The rotation limit.
         scale_limit : float | None
             The scale limit.
-        translation_limit : List[float] | None
+        translation_limit : list[float] | None
             The translation limit.
         
         Returns
@@ -703,15 +700,15 @@ class Reducer:
         
         if rotation_limit:
             if abs(transform.rotation) > rotation_limit:
-                self.logger.info(f'[OPTICAM] File {file} transform exceeded rotation limit. Rotation limit is {rotation_limit}, but rotation was {transform.rotation}.')
+                self.logger.info(f'[OPTICAM] File {file.path} extension {file.ext} transform exceeded rotation limit. Rotation limit is {rotation_limit}, but rotation was {transform.rotation}.')
                 return False
         if scale_limit:
             if transform.scale > scale_limit:
-                self.logger.info(f'[OPTICAM] File {file} transform exceeded scale limit. Scale limit is {scale_limit}, but scale was {transform.scale}.')
+                self.logger.info(f'[OPTICAM] File {file.path} extension {file.ext} transform exceeded scale limit. Scale limit is {scale_limit}, but scale was {transform.scale}.')
                 return False
         if translation_limit:
             if abs(transform.translation[0]) > translation_limit[0] or abs(transform.translation[1]) > translation_limit[1]:
-                self.logger.info(f'[OPTICAM] File {file} transform exceeded translation limit. Translation limit is {translation_limit}, but translation was {transform.translation}.')
+                self.logger.info(f'[OPTICAM] File {file.path} extension {file.ext} transform exceeded translation limit. Translation limit is {translation_limit}, but translation was {transform.translation}.')
                 return False
         
         return True
@@ -755,7 +752,7 @@ class Reducer:
 
     def plot_growth_curves(
         self,
-        targets: Dict[str, int | List[int]] | None = None,
+        targets: dict[str, int | list[int]] | None = None,
         save: bool = False,
         ) -> None:
         """
@@ -764,7 +761,7 @@ class Reducer:
         
         Parameters
         ----------
-        targets : Dict[str, int | List[int]] | None, optional
+        targets : dict[str, int | list[int]] | None, optional
             The targets for which growth curves will be created, by default `None` (growth curves are created for all
             catalog sources). To create growth curves for specific targets, pass a dictionary with keys listing the
             desired filters and values listing each filter's correpsonding target(s). For example:
@@ -873,7 +870,7 @@ class Reducer:
         
         plot_snrs(
             out_directory=self.out_directory,
-            file_paths=self.reference_files,
+            files=self.reference_files,
             background=self.background,
             psf_params=self.psf_params,
             catalogs=self.catalogs,
@@ -899,7 +896,7 @@ class Reducer:
         
         plot_noise(
             out_directory=self.out_directory,
-            file_paths=self.reference_files,
+            files=self.reference_files,
             background=self.background,
             psf_params=self.psf_params,
             catalogs=self.catalogs,
@@ -952,9 +949,7 @@ class Reducer:
                     fltr=fltr,
                     transforms=self.transforms,
                     reference_file=self.reference_files[fltr],
-                    flat_corrector=self.flat_corrector,
                     rebin_factor=self.rebin_factor,
-                    remove_cosmic_rays=self.remove_cosmic_rays,
                     background=self.background,
                     instrument=self.instrument,
                     ),
@@ -979,7 +974,7 @@ class Reducer:
     def plot_apertures(
         self,
         photometer: AperturePhotometer,
-        targets: Dict[str, int] | Dict[str, List[int]] | Dict[str, List[int] | int] | None = None,
+        targets: dict[str, int] | dict[str, list[int]] | dict[str, list[int] | int] | None = None,
         save: bool = False,
         ) -> None:
         """
@@ -990,7 +985,7 @@ class Reducer:
         photometer : AperturePhotometer
             The `AperturePhotometer` instance. If a local background estimator has been defined, this will also be
             plotted.
-        targets : Dict[str, int] | Dict[str, List[int]] | Dict[str, List[int] | int] | None
+        targets : dict[str, int] | dict[str, list[int]] | dict[str, list[int] | int] | None
             The targets for which apertures will be plotted, by default `None` (apertures are plotted for all
             sources). To plot apertures for specific targets, pass a dictionary with keys listing the
             desired filters and values listing each filter's correpsonding target(s). For example:
@@ -1018,7 +1013,7 @@ class Reducer:
                 continue
             
             img = get_data(
-                file_path=self.reference_files[fltr],
+                file=self.reference_files[fltr],
                 instrument=self.instrument,
                 bias_corrector=self.bias_corrector,
                 dark_corrector=self.dark_corrector,
@@ -1076,8 +1071,8 @@ class Reducer:
                                       self.catalogs[fltr]["ycentroid"].value],  # type:ignore
                                      ).T
             
-            file_paths = [file_path for file_path in self.camera_files[fltr] if file_path not in self.unaligned_files]
-            batch_size = get_batch_size(len(file_paths))
+            files = [file for file in self.camera_files[fltr] if file not in self.unaligned_files]
+            batch_size = get_batch_size(len(files))
             results = process_map(
                 partial(
                     self._perform_photometry,
@@ -1085,7 +1080,7 @@ class Reducer:
                     source_coords=source_coords,
                     fltr=fltr,
                 ),
-                file_paths,
+                files,
                 max_workers=self.number_of_processors,
                 disable=not self.verbose,
                 desc=f"[OPTICAM] Performing photometry on {fltr} images",
@@ -1112,18 +1107,18 @@ class Reducer:
 
     def _perform_photometry(
         self,
-        file_path: Path,
+        file: MEFSlice,
         photometer: BasePhotometer,
         source_coords: NDArray,
         fltr: str,
-        ) -> Dict[str, List]:
+        ) -> dict[str, list]:
         """
         Perform photometry on a file.
         
         Parameters
         ----------
-        file_path : Path
-            The file path.
+        file : MEFSlice
+            The file.
         photometer : BasePhotometer
             The photometer to use.
         source_coords : NDArray
@@ -1133,12 +1128,12 @@ class Reducer:
         
         Returns
         -------
-        Dict[str, List]
+        dict[str, list]
             The photometry results.
         """
         
         image, bias_var, dark_var, flat_var = get_data(
-            file_path=file_path,
+            file=file,
             instrument=self.instrument,
             bias_corrector=self.bias_corrector,
             dark_corrector=self.dark_corrector,
@@ -1165,7 +1160,7 @@ class Reducer:
                                         tbl["ycentroid"].value],
                                         ).T
             except Exception as e:
-                self.logger.warning(f"[OPTICAM] Could not determine source coordinates in {file_path}: {e}")
+                self.logger.warning(f"[OPTICAM] Could not determine source coordinates in {file.path} extension {file.ext}: {e}")
         
         results = photometer.compute(
             image=image,
@@ -1181,36 +1176,31 @@ class Reducer:
         
         # add time stamp
         if self.barycenter:
-            results['BMJD'] = self.bmjds[file_path]
+            results['BMJD'] = self.bmjds[file.key]
         else:
-            results['MJD'] = self.bmjds[file_path]
+            results['MJD'] = self.bmjds[file.key]
         
         return results
 
 
     def update_unaligned_files(
         self,
-        file_paths: Path | List[Path],
+        files: MEFSlice | list[MEFSlice],
         ) -> None:
         """
         Add one or more files to the list of unaligned files. Unaligned files are skipped when performing photometry.
         
         Parameters
         ----------
-        files : Path | List[Path]
+        files : MEFSlice | list[MEFSlice]
             The file or files.
         """
         
-        if isinstance(file_paths, Path):
-            file_paths = [file_paths]
+        if isinstance(files, MEFSlice):
+            files = [files]
         
-        for file_path in file_paths:
-            if os.path.isfile(file_path):
-                self.unaligned_files.append(file_path)
-            elif os.path.isfile(self.data_directory.joinpath(file_path)):
-                self.unaligned_files.append(self.data_directory.joinpath(file_path))
-            else:
-                raise ValueError(f'[OPTICAM] file {file_path} could not be found.')
+        for file in files:
+            self.unaligned_files.append(file)
         
         save_unaligned_files(
             out_directory=self.out_directory,
@@ -1271,9 +1261,9 @@ def log_reducer_params(
 
 def log_dark_current(
     out_directory: str,
-    dark_currs: Dict[str, float],
-    bmjds: Dict[str, float],
-    camera_files: Dict[str, List[str]],
+    dark_currs: dict[str, float],
+    bmjds: dict[str, float],
+    camera_files: dict[str, list[str]],
     ) -> None:
     """
     Save the dark currents for each filter.
@@ -1282,11 +1272,11 @@ def log_dark_current(
     ----------
     out_directory : str
         The path to the output directory.
-    dark_currs : Dict[str, float]
+    dark_currs : dict[str, float]
         The dark current for each file {file: dark current}.
-    bmjds : Dict[str, float]
+    bmjds : dict[str, float]
         The time stamp for each file {file: time stamp}.
-    camera_files : Dict[str, List[str]]
+    camera_files : dict[str, list[str]]
         The files grouped by filter {filter: files}.
     """
     
@@ -1304,7 +1294,7 @@ def log_dark_current(
 def set_psf_params(
     aperture_selector: Callable,
     catalog: QTable,
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
     """
     Set the PSF parameters.
     
@@ -1317,7 +1307,7 @@ def set_psf_params(
     
     Returns
     -------
-    Dict[str, float]
+    dict[str, float]
         The PSF parameters.
     """
     
@@ -1333,38 +1323,38 @@ def set_psf_params(
 
 
 def parse_alignment_results(
-    results: Tuple,
-    camera_files: List[Path],
-    transforms: Dict[Path, List[float]],
-    unaligned_files: List[Path],
+    results: tuple,
+    camera_files: list[MEFSlice],
+    transforms: dict[str, list[float]],
+    unaligned_files: list[MEFSlice],
     verbose: bool,
-    ) -> Tuple[Dict[Path, List[float]], List[Path], NDArray[np.float64], Dict[Path, Dict[str, float]]]:
+    ) -> tuple[dict[str, list[float]], list[MEFSlice], NDArray[np.float64], dict[str, dict[str, float]]]:
     """
     Parse the alignment results.
     
     Parameters
     ----------
-    results : Tuple
+    results : tuple
         The alignment results.
-    camera_files : List[Path]
-        The file paths for all files. 
-    transforms : Dict[Path, List[float]]
+    camera_files : list[MEFSlice]
+        The files. 
+    transforms : dict[Path, list[float]]
         The image-to-image alignments {file path: transform}.
-    unaligned_files : List[Path]
-        The paths of the files that could not be aligned.
+    unaligned_files : list[MEFSlice]
+        The files that could not be aligned.
     verbose : bool
         Whether to include output.
     
     Returns
     -------
-    Tuple[Dict[str, List[float]], List[str], NDArray, Dict[str, float], Dict[str, float]]
+    tuple[dict[str, list[float]], list[str], NDArray, dict[str, float], dict[str, float]]
         The updated transforms, unaligned files, stacked image, median background values and median background RMS
         values.
     """
     
-    fltr_transforms: Dict[Path, List[float]] = {}
-    fltr_unaligned_files: List[Path] = []
-    fltr_background: Dict[Path, Dict[str, float]] = {}
+    fltr_transforms: dict[str, list[float]] = {}
+    fltr_unaligned_files: list[MEFSlice] = []
+    fltr_background: dict[str, dict[str, float]] = {}
     
     # unpack results
     batch_stacked_images, batch_transforms, batch_backgrounds = zip(*results)
@@ -1376,7 +1366,7 @@ def parse_alignment_results(
     
     aligned_files = list(fltr_transforms.keys())
     for file in camera_files:
-        if file not in aligned_files:
+        if file.key not in aligned_files:
             fltr_unaligned_files.append(file)
     
     stacked_image = np.sum(batch_stacked_images, axis=0)  # stack images
@@ -1394,9 +1384,9 @@ def parse_alignment_results(
 
 def save_background(
     out_directory: Path,
-    background: Dict[Path, Dict[str, float]],
+    background: dict[str, dict[str, float]],
     fltr: str,
-    bmjds: Dict[Path, float],
+    bmjds: dict[str, float],
     ) -> None:
     """
     Save the median background and its RMS to a CSV file.
@@ -1405,11 +1395,11 @@ def save_background(
     ----------
     out_directory : Path
         The output directory.
-    background : Dict[Path, Dict[str, float]]
+    background : dict[Path, dict[str, float]]
         The background values for each file.
     fltr : str
         The corresponding filter.
-    bmjds : Dict[Path, float]
+    bmjds : dict[Path, float]
         The BMJD values for each file {file path}.
     """
     
@@ -1428,7 +1418,7 @@ def save_background(
 
 def save_unaligned_files(
     out_directory: Path,
-    unaligned_files: List[Path],
+    unaligned_files: list[MEFSlice],
     ) -> None:
     """
     Save the unaligned files to a text file.
@@ -1437,44 +1427,44 @@ def save_unaligned_files(
     ----------
     out_directory : Path
         The output directory.
-    unaligned_files : List[Path]
+    unaligned_files : list[MEFSlice]
         The list of unaligned files.
     """
     
     if len(unaligned_files) > 0:
         with open(os.path.join(out_directory, "diag/unaligned_files.txt"), "w") as unaligned_file:
             for file in unaligned_files:
-                unaligned_file.write(str(file) + "\n")
+                unaligned_file.write(str(file.key) + "\n")
 
 
 def get_random_image_for_each_filter(
-    camera_files: Dict[str, List[Path]],
+    camera_files: dict[str, list[MEFSlice]],
     instrument: Instrument,
-    ) -> Dict[str, NDArray]:
+    ) -> dict[str, NDArray]:
     """
     Choose a random image for each filter from a dictionary.
     
     Parameters
     ----------
-    camera_files : Dict[str, List[Path]]
+    camera_files : dict[str, list[Path]]
         The filters and corresponding files in the data directory {filter: [paths to images]}.
     instrument : Instrument
         The instrument.
     
     Returns
     -------
-    Dict[str, NDArray]
+    dict[str, NDArray]
         A dictionary containing a random file for each filter
     """
     
     rng = np.random.default_rng()
     images = {}
     
-    for file_paths in camera_files.values():
-        file_path = file_paths[rng.choice(len(file_paths))]  # choose a random file
-        file_name = str(file_path).split('/')[-1]  # get file name (final part of the file path)
+    for files in camera_files.values():
+        file = files[rng.choice(len(files))]  # choose a random file
+        file_name = file.path.name
         images[file_name] = get_data(
-            file_path=Path(file_path),
+            file=file,
             instrument=instrument,
             rebin_factor=1,
             remove_cosmic_rays=False,
@@ -1484,23 +1474,23 @@ def get_random_image_for_each_filter(
 
 
 def create_targets_dict(
-    catalogs: Dict[str, QTable],
-    ) -> Dict[str, List[int]]:
+    catalogs: dict[str, QTable],
+    ) -> dict[str, list[int]]:
     """
     Create a dictionary of target IDs for all catalog sources.
     
     Parameters
     ----------
-    catalogs : Dict[str, QTable]
+    catalogs : dict[str, QTable]
         The catalogs.
     
     Returns
     -------
-    Dict[str, List[int]]
+    dict[str, list[int]]
         The target IDs for all catalog sources.
     """
     
-    targets: Dict[str, List[int]] = {}
+    targets: dict[str, list[int]] = {}
     
     for fltr, cat in catalogs.items():
         targets[fltr] = []
@@ -1511,8 +1501,8 @@ def create_targets_dict(
 
 
 def save_photometry_results(
-    results: Tuple[Dict],
-    catalogs: Dict[str, QTable],
+    results: tuple[dict],
+    catalogs: dict[str, QTable],
     barycenter: bool,
     save_dir: Path,
     fltr: str,
@@ -1522,9 +1512,9 @@ def save_photometry_results(
     
     Parameters
     ----------
-    results : Tuple[Dict]
+    results : tuple[dict]
         The photometry results.
-    catalogs : Dict[str, QTable]
+    catalogs : dict[str, QTable]
         The source catalogs.
     save_dir : Path
         The save directory path.
@@ -1571,19 +1561,19 @@ def save_photometry_results(
             )
 
 def parse_photometry_results(
-    results: Tuple[Dict[str, List]],
-    ) -> Dict[str, List[List[float]]]:
+    results: tuple[dict[str, list]],
+    ) -> dict[str, list[list[float]]]:
     """
     Merge the multiprocessed photometry results into a single dictionary.
     
     Parameters
     ----------
-    results : Tuple[Dict[str, List]]
+    results : tuple[dict[str, list]]
         The multiprocessed photometry results.
     
     Returns
     -------
-    Dict[str, List[List[float]]]
+    dict[str, list[list[float]]]
         The photometry results in a single dictionary.
     """
     
