@@ -1,6 +1,6 @@
 from functools import partial
 import json
-import logging
+from logging import Logger
 from multiprocessing import cpu_count
 import os
 from pathlib import Path
@@ -24,16 +24,16 @@ from opticam.background.global_background import BaseBackground, DefaultBackgrou
 from opticam.correctors import BiasCorrector, DarkNoiseCorrector, FlatFieldCorrector
 from opticam.finders import DefaultFinder, get_source_coords_from_image
 from opticam.instruments import Instrument, OPTICAM_MX
+from opticam.mef_slice import MEFSlice
 from opticam.photometers import AperturePhotometer, BasePhotometer
+from opticam.plotting.gifs import compile_gif, create_gif_frame
+from opticam.plotting.plots import plot_backgrounds, plot_background_meshes, plot_catalogs, plot_growth_curves, \
+    plot_time_between_files, plot_psf, plot_rms_vs_median_flux, plot_noise, plot_snrs, plot_apertures
 from opticam.utils.batching import get_batches, get_batch_size
 from opticam.utils.constants import bar_format
 from opticam.utils.data_checks import scan_data
-from opticam.mef_slice import MEFSlice
 from opticam.utils.fits_handlers import get_data, get_stacked_images, save_stacked_images
-from opticam.plotting.gifs import compile_gif, create_gif_frame
-from opticam.utils.logging import recursive_log, log_psf_params
-from opticam.plotting.plots import plot_backgrounds, plot_background_meshes, plot_catalogs, plot_growth_curves, \
-    plot_time_between_files, plot_psf, plot_rms_vs_median_flux, plot_noise, plot_snrs, plot_apertures
+from opticam.utils.logging import configure_logger, log_psf_params, recursive_log
 
 
 
@@ -139,20 +139,10 @@ class Reducer:
         
         ########################################### logger ###########################################
         
-        # configure logger
-        self.logger = logging.getLogger('OPTICAM')
-        self.logger.setLevel(logging.INFO)
-        
-        # clear existing handlers
-        if self.logger.hasHandlers():
-            self.logger.handlers.clear()
-        
-        # create file handler
-        file_handler = logging.FileHandler(os.path.join(self.out_directory, 'info.log'))
-        file_handler.setLevel(logging.INFO)
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        file_handler.setFormatter(formatter)
-        self.logger.addHandler(file_handler)
+        self.logger = configure_logger(
+            out_directory=self.out_directory,
+            verbose=self.verbose,
+            )
         
         ########################################### sub-directories ###########################################
         
@@ -253,11 +243,11 @@ class Reducer:
         if background is None:
             box_size = 2048 // self.binning_scale // self.rebin_factor // 32
             self.background = DefaultBackground(box_size)
-            self.logger.info(f'[OPTICAM] Using default background estimator with box_size={box_size}.')
+            self.logger.debug(f'Using default background estimator with box_size={box_size}.')
         elif callable(background):
             # use custom background estimator
             self.background = background
-            self.logger.info(f'[OPTICAM] Using custom background estimator {background.__class__.__name__} with parameters {background.__dict__}.')
+            self.logger.debug(f'Using custom background estimator {background.__class__.__name__} with parameters {background.__dict__}.')
         else:
             raise ValueError('[OPTICAM] background must be a callable or None. If None, the default background estimator is used.')
         
@@ -268,10 +258,10 @@ class Reducer:
             npixels = 128 // (2048 // effective_image_size)**2
             border_width = 2048 // self.binning_scale // self.rebin_factor // 16
             self.finder = DefaultFinder(npixels, border_width)
-            self.logger.info(f'[OPTICAM] Using default source finder with npixels={npixels} and border_width={border_width}.')
+            self.logger.debug(f'Using default source finder with npixels={npixels} and border_width={border_width}.')
         elif callable(finder):
             self.finder = finder
-            self.logger.info(f'[OPTICAM] Using custom source finder {finder.__class__.__name__} with parameters {finder.__dict__}.')
+            self.logger.debug(f'Using custom source finder {finder.__class__.__name__} with parameters {finder.__dict__}.')
         else:
             raise ValueError('[OPTICAM] finder must be a callable or None. If None, the default source finder is used.')
         
@@ -294,7 +284,7 @@ class Reducer:
                 self.transforms.update(json.load(file))
             
             if self.verbose:
-                self.logger.info("[OPTICAM] Read transforms from file.")
+                self.logger.info("Read transforms from file.")
         
         ########################################### read catalogs ###########################################
         
@@ -313,8 +303,8 @@ class Reducer:
                     aperture_selector=self.aperture_selector,
                     catalog=self.catalogs[fltr],
                     )
-                if self.verbose:
-                    print(f"[OPTICAM] Read {fltr} catalog from file.")
+                
+                self.logger.info(f"Read {fltr} catalog from file.")
         
         ########################################### read unaligned files ###########################################
         
@@ -324,8 +314,7 @@ class Reducer:
                 for line in file:
                     self.unaligned_files.append(line)
             
-            if self.verbose:
-                    print(f"[OPTICAM] Read unaligned files from file.")
+            self.logger.info(f"Read unaligned files from file.")
 
 
     def create_catalogs(
@@ -376,7 +365,7 @@ class Reducer:
         
         # if catalogs already exist, skip
         if os.path.isfile(os.path.join(self.out_directory, 'cat/catalogs.pdf')) and not overwrite:
-            print('[OPTICAM] Catalogs already exist. To overwrite, set overwrite=True.')
+            self.logger.info('Catalogs already exist. To overwrite, set overwrite=True.')
             
             plot_catalogs(
                 out_directory=self.out_directory,
@@ -388,8 +377,7 @@ class Reducer:
             
             return
         
-        if self.verbose:
-            print('[OPTICAM] Creating source catalogs')
+        self.logger.info('Creating source catalogs.')
         
         stacked_images = {}
         
@@ -421,14 +409,14 @@ class Reducer:
                     n_sources=n_alignment_sources,
                     )
             except Exception as e:
-                self.logger.info(f'[OPTICAM] No sources detected in {fltr} reference image ({self.reference_files[fltr]}): {e}. Reducing threshold or npixels in the source finder may help.')
+                self.logger.error(f'No sources detected in {fltr} reference image ({self.reference_files[fltr]}): {e}. Reducing threshold or npixels in the source finder may help.')
                 continue
             
             if len(reference_coords) < n_alignment_sources and transform_type == 'translation':
-                self.logger.info(f'[OPTICAM] Found {len(reference_coords)} sources in {fltr} reference image ({self.reference_files[fltr]}) but n_alignment_sources={n_alignment_sources}. transform_type="translation" requires at least n_alignment_sources be detected in the reference image to work. Consider reducing n_alignment_sources and/or threshold, or using transform_type="affine".')
+                self.logger.error(f'Found {len(reference_coords)} sources in {fltr} reference image ({self.reference_files[fltr]}) but n_alignment_sources={n_alignment_sources}. transform_type="translation" requires at least n_alignment_sources be detected in the reference image to work. Consider reducing n_alignment_sources and/or threshold, or using transform_type="affine".')
                 continue
             
-            self.logger.info(f'[OPTICAM] {fltr} alignment source coordinates: {reference_coords}')
+            self.logger.debug(f'{fltr} alignment source coordinates: {reference_coords}')
             
             # align and stack images in batches
             batches = get_batches(self.camera_files[fltr])
@@ -456,18 +444,14 @@ class Reducer:
                 camera_files=self.camera_files[fltr],
                 transforms=self.transforms,
                 unaligned_files=self.unaligned_files,
-                verbose=self.verbose,
+                logger=self.logger,
                 )
             
-            try:
-                # estimate threshold for source detection
-                threshold = detect_threshold(
-                    stacked_image,
-                    nsigma=self.threshold,
-                    )
-            except Exception as e:
-                self.logger.info(f'[OPTICAM] Unable to estimate source detection threshold for {fltr} stacked image: {e}.')
-                continue
+            # estimate threshold for source detection
+            threshold = detect_threshold(
+                stacked_image,
+                nsigma=self.threshold,
+                )
             
             try:
                 # identify sources in stacked image
@@ -476,7 +460,7 @@ class Reducer:
                     threshold,
                     )
             except Exception as e:
-                self.logger.info(f'[OPTICAM] No sources detected in the stacked {fltr} stacked image: {e}. Reducing threshold may help.')
+                self.logger.error(f'No sources detected in the stacked {fltr} stacked image: {e}. Reducing threshold may help.')
                 continue
             
             # save stacked image
@@ -556,7 +540,12 @@ class Reducer:
         scale_limit: float | None,
         translation_limit: list[float] | None,
         n_alignment_sources: int,
-        ) -> tuple[NDArray[np.float64], dict[str, list[float]], dict[str, dict[str, float]]]:
+        ) -> tuple[
+            NDArray[np.float64],
+            dict[str, list[float]],
+            dict[str, dict[str, float]],
+            list[tuple[str, str]],
+            ]:
         """
         Align a batch of images with respect to some reference coordinates.
         
@@ -581,13 +570,14 @@ class Reducer:
         
         Returns
         -------
-        tuple[NDArray[np.float64], dict[str, list[float]], dict[str, dict[str, float]]]
-            The stacked image, transforms, and background results.
+        tuple[NDArray[np.float64], dict[str, list[float]], dict[str, dict[str, float]], list[tuple[str, str]]]
+            The stacked image, transforms, background results, and log messages.
         """
         
         stacked_image = np.zeros(reference_image_shape)  # create empty stacked image
         transforms: dict[str, list[float]] = {}
         bkg_dict: dict[str, dict[str, float]] = {}
+        queued_logs: list[tuple[str, str]] = []
         
         for file in batch:
             data = get_data(
@@ -612,11 +602,11 @@ class Reducer:
                     bkg=bkg,
                     )
             except Exception as e:
-                self.logger.info(f'[OPTICAM] No sources detected in {file.path} extension {file.ext}: {e}')
+                queued_logs.append(('error', f'No sources detected in {file.path} extension {file.ext}: {e} Skipping.'))
                 continue
             
             if len(coords) < n_alignment_sources and transform_type == 'translation':
-                self.logger.info(f'[OPTICAM] {len(coords)} sources detected in {file.path} extension {file.ext} but n_alignment_sources={n_alignment_sources} and transform_type="translation". Skipping. To attempt to align images in which fewer than n_alignment_sources are detected, try transform_type="affine".')
+                queued_logs.append(('error', f'{len(coords)} sources detected in {file.path} extension {file.ext} but n_alignment_sources={n_alignment_sources} and transform_type="translation". Skipping. To attempt to align images in which fewer than n_alignment_sources are detected, try transform_type="affine".'))
                 continue
             
             if transform_type == 'translation':
@@ -634,17 +624,19 @@ class Reducer:
                         max_control_points=n_alignment_sources,
                         )[0]
                 except Exception as e:
-                    self.logger.info(f'[OPTICAM] Could not align {file.path} extension {file.ext} due to the following exception: {e}. Skipping.')
+                    queued_logs.append(('error', f'Could not align {file.path} extension {file.ext} due to the following exception: {e}. Skipping.'))
                     continue
             
             # validate transform
-            if not self._valid_transform(
+            valid_transform, log_message = self._valid_transform(
                 file=file,
                 transform=transform,
                 rotation_limit=rotation_limit,
                 scale_limit=scale_limit,
                 translation_limit=translation_limit,
-                ):
+                )
+            if not valid_transform:
+                queued_logs.append(log_message)
                 continue
             
             transforms[file.key] = transform.params.tolist()  # type: ignore
@@ -665,7 +657,7 @@ class Reducer:
                 preserve_range=True,
                 )
         
-        return stacked_image, transforms, bkg_dict
+        return stacked_image, transforms, bkg_dict, queued_logs
 
 
     def _valid_transform(
@@ -675,7 +667,7 @@ class Reducer:
         rotation_limit: float | None,
         scale_limit: float | None,
         translation_limit: list[float] | None,
-        ) -> bool:
+        ) -> tuple[bool, None | tuple[str, str]]:
         """
         Find whether a transform is valid given some transform limits.
         
@@ -694,24 +686,21 @@ class Reducer:
         
         Returns
         -------
-        bool
-            Whether the transform is valid.
+        tuple[bool, None | tuple[str, str]]
+            Whether the transform is valid. If not, a log message is also returned as a tuple: (log level, log string).
         """
         
         if rotation_limit:
             if abs(transform.rotation) > rotation_limit:
-                self.logger.info(f'[OPTICAM] File {file.path} extension {file.ext} transform exceeded rotation limit. Rotation limit is {rotation_limit}, but rotation was {transform.rotation}.')
-                return False
+                return False, ('error', f'File {file.path} extension {file.ext} transform exceeded rotation limit. Rotation limit is {rotation_limit}, but rotation was {transform.rotation}.')
         if scale_limit:
             if transform.scale > scale_limit:
-                self.logger.info(f'[OPTICAM] File {file.path} extension {file.ext} transform exceeded scale limit. Scale limit is {scale_limit}, but scale was {transform.scale}.')
-                return False
+                return False, ('error', f'File {file.path} extension {file.ext} transform exceeded scale limit. Scale limit is {scale_limit}, but scale was {transform.scale}.')
         if translation_limit:
             if abs(transform.translation[0]) > translation_limit[0] or abs(transform.translation[1]) > translation_limit[1]:
-                self.logger.info(f'[OPTICAM] File {file.path} extension {file.ext} transform exceeded translation limit. Translation limit is {translation_limit}, but translation was {transform.translation}.')
-                return False
+                return False, ('error', f'File {file.path} extension {file.ext} transform exceeded translation limit. Translation limit is {translation_limit}, but translation was {transform.translation}.')
         
-        return True
+        return True, None
 
 
     def plot_background_meshes(
@@ -787,12 +776,12 @@ class Reducer:
         else:
             growth_curve_targets = targets
         
-        self.logger.info(f'[OPTICAM] Generating growth curves for targets: {repr(growth_curve_targets)}')
+        self.logger.info(f'Generating growth curves for targets: {repr(growth_curve_targets)}')
         
         for fltr, cat in self.catalogs.items():
             
             if fltr not in growth_curve_targets.keys():
-                self.logger.info(f'[OPTICAM] Filter {fltr} is not in target dictionary. Skipping.')
+                self.logger.error(f'Filter {fltr} is not in target dictionary. Skipping.')
                 continue
             
             fig = plot_growth_curves(
@@ -817,7 +806,7 @@ class Reducer:
             else:
                 plt.close(fig)
         
-        self.logger.info('[OPTICAM] Growth curves generated.')
+        self.logger.info('Growth curves generated.')
 
 
     def plot_psfs(
@@ -932,7 +921,7 @@ class Reducer:
             if len(self.camera_files[fltr]) == 0:
                 continue
             elif os.path.exists(os.path.join(self.out_directory, f"cat/{fltr}_images.gif")) and not overwrite:
-                print(f"[OPTICAM] {fltr} GIF already exists. To overwrite, set overwrite to True.")
+                self.logger.info(f"[OPTICAM] {fltr} GIF already exists. To overwrite, set overwrite to True.")
                 continue
             
             # create gif frames directory if it does not exist
@@ -1055,7 +1044,7 @@ class Reducer:
         # define save directory using the photometer name
         save_name = photometer.get_label()
         
-        print(f'[OPTICAM] Photometry results will be saved to lcs/{save_name} in {self.out_directory}.')
+        self.logger.info(f'[OPTICAM] Photometry results will be saved to lcs/{save_name} in {self.out_directory}.')
         
         save_dir = self.out_directory.joinpath(f"lcs/{save_name}")
         if not os.path.isdir(save_dir):
@@ -1064,7 +1053,7 @@ class Reducer:
         # for each filter
         for fltr in self.catalogs.keys():
             if os.path.isfile(os.path.join(save_dir, f'{fltr}_source_1.csv')) and not overwrite:
-                print(f'[OPTICAM] Skipping {fltr} since existing light curves files were found. To overwrite these files, set overwrite=True.')
+                self.logger.info(f'[OPTICAM] Skipping {fltr} since existing light curves files were found. To overwrite these files, set overwrite=True.')
                 continue
             
             source_coords = np.array([self.catalogs[fltr]["xcentroid"].value,  # type: ignore
@@ -1154,13 +1143,10 @@ class Reducer:
         
         image_coords = None  # assume no image coordinates by default
         if not photometer.forced:
-            try:
-                tbl = self.finder(image, threshold)
-                image_coords = np.array([tbl["xcentroid"].value,
-                                        tbl["ycentroid"].value],
-                                        ).T
-            except Exception as e:
-                self.logger.warning(f"[OPTICAM] Could not determine source coordinates in {file.path} extension {file.ext}: {e}")
+            tbl = self.finder(image, threshold)
+            image_coords = np.array([tbl["xcentroid"].value,
+                                    tbl["ycentroid"].value],
+                                    ).T
         
         results = photometer.compute(
             image=image,
@@ -1327,7 +1313,7 @@ def parse_alignment_results(
     camera_files: list[MEFSlice],
     transforms: dict[str, list[float]],
     unaligned_files: list[MEFSlice],
-    verbose: bool,
+    logger: Logger,
     ) -> tuple[dict[str, list[float]], list[MEFSlice], NDArray[np.float64], dict[str, dict[str, float]]]:
     """
     Parse the alignment results.
@@ -1342,8 +1328,8 @@ def parse_alignment_results(
         The image-to-image alignments {file path: transform}.
     unaligned_files : list[MEFSlice]
         The files that could not be aligned.
-    verbose : bool
-        Whether to include output.
+    logger : Logger
+        The logger.
     
     Returns
     -------
@@ -1355,14 +1341,22 @@ def parse_alignment_results(
     fltr_transforms: dict[str, list[float]] = {}
     fltr_unaligned_files: list[MEFSlice] = []
     fltr_background: dict[str, dict[str, float]] = {}
+    queued_logs: list[tuple[str, str]] = []
     
     # unpack results
-    batch_stacked_images, batch_transforms, batch_backgrounds = zip(*results)
+    batch_stacked_images, batch_transforms, batch_backgrounds, batch_queued_logs = zip(*results)
     
     # combine results
     for i in range(len(batch_stacked_images)):
         fltr_transforms.update(batch_transforms[i])
         fltr_background.update(batch_backgrounds[i])
+        queued_logs += batch_queued_logs[i]
+    
+    # write log messages
+    write_queued_logs(
+        queued_logs=queued_logs,
+        logger=logger,
+        )
     
     aligned_files = list(fltr_transforms.keys())
     for file in camera_files:
@@ -1374,12 +1368,33 @@ def parse_alignment_results(
     transforms.update(fltr_transforms)  # update transforms to include current filter
     unaligned_files += fltr_unaligned_files  # update unaligned files
     
-    if verbose:
-        print(f"[OPTICAM] Done.")
-        print(f'[OPTICAM] {len(fltr_transforms)} image(s) aligned.')
-        print(f'[OPTICAM] {len(fltr_unaligned_files)} image(s) could not be aligned.')
+    logger.info(f"[OPTICAM] Done.")
+    logger.info(f'[OPTICAM] {len(fltr_transforms)} image(s) aligned.')
+    logger.info(f'[OPTICAM] {len(fltr_unaligned_files)} image(s) could not be aligned.')
     
     return transforms, unaligned_files, stacked_image, fltr_background
+
+
+def write_queued_logs(
+    queued_logs: list[tuple[str, str]],
+    logger: Logger,
+    ) -> None:
+    
+    for queued_log in queued_logs:
+        if len(queued_log) > 0:
+            level, message = queued_log
+            if level.lower() == 'debug':
+                logger.debug(message)
+            elif level.lower() == 'info':
+                logger.info(message)
+            elif level.lower() == 'warning':
+                logger.warning(message)
+            elif level.lower() == 'error':
+                logger.error(message)
+            elif level.lower() == 'critical':
+                logger.critical(message)
+            else:
+                raise ValueError(f'[OPTICAM] Unrecognised log level {level}.')
 
 
 def save_background(

@@ -1,16 +1,64 @@
 import json
+import logging
+from logging import Logger
 import os
 from pathlib import Path
+import sys
 from types import FunctionType
-from typing import Any, Dict
+from typing import Any
 
 
+
+
+def configure_logger(
+    out_directory: Path,
+    verbose: bool,
+    ) -> Logger:
+    """
+    Configure the reduction logger.
+    
+    Parameters
+    ----------
+    out_directory : Path
+        The path to the directory in which the log file will be written.
+    verbose : bool
+        Whether to also output to stdout.
+    
+    Returns
+    -------
+    Logger
+        The logger.
+    """
+    
+    logger = logging.getLogger('OPTICAM')
+    logger.setLevel(logging.DEBUG)
+    
+    # clear existing handlers
+    if logger.hasHandlers():
+        logger.handlers.clear()
+    
+    # create file handler
+    file_handler = logging.FileHandler(os.path.join(out_directory, 'info.log'))
+    file_handler.setLevel(logging.DEBUG)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    
+    # create console handler
+    if verbose:
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(logging.INFO)
+        formatter = logging.Formatter('[%(name)s] %(message)s')
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
+    
+    return logger
 
 
 def log_file(
     out_directory: Path,
     file_name: str,
-    file_contents: Dict[Any, Any],
+    file_contents: dict[Any, Any],
     ) -> None:
     """
     Log `file_contents` to a JSON file in `out_directory/diag/`.
@@ -21,7 +69,7 @@ def log_file(
         The output directory.
     file_name : str
         The name of the diagnostic file. A `.json' suffix is automatically added.
-    file_contents : Dict[Any, Any]
+    file_contents : dict[Any, Any]
         The contents that will be saved to the file.
     """
     
@@ -80,10 +128,10 @@ def recursive_log(param: Any, depth: int = 0, max_depth: int = 5) -> Any:
 
 def log_psf_params(
     out_directory: Path,
-    psf_params: Dict[str, Dict[str, float]],
+    psf_params: dict[str, dict[str, float]],
     binning_scale: int,
     rebin_factor: int,
-    pixel_scales: Dict[str, float],
+    pixel_scales: dict[str, float],
     ) -> None:
     """
     Log the PSF parameters.
@@ -92,13 +140,13 @@ def log_psf_params(
     ----------
     out_directory : str
         The path to the output directory.
-    psf_params : Dict[str, Dict[str, float]]
+    psf_params : dict[str, dict[str, float]]
         The PSF parameters {filter: {PSF param: value}}.
     binning_scale : int
         The observation binning scale.
     rebin_factor : int
         The software rebinning factor.
-    pixel_scales : Dict[str, float]
+    pixel_scales : dict[str, float]
         The pixel scale for each filter in arcsec/pixel {filter: pixel scale}.
     """
     
