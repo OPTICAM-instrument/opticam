@@ -118,11 +118,3 @@ dmypy.json
 *.swo
 *~
 .DS_Store
-
-# Project-specific tutorial directories
-docs/tutorials/background_tutorial
-docs/tutorials/corrections_tutorial
-docs/tutorials/finders_tutorial
-docs/tutorials/local_backgrounds_tutorial
-docs/tutorials/reduction_tutorial
-docs/tutorials/timing_analysis_tutorial

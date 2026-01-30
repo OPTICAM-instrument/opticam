@@ -1,13 +1,17 @@
+from astropy.coordinates import SkyCoord
 from astropy.time import Time
-from astropy.coordinates import EarthLocation, SkyCoord
 from astropy import units as u
 import numpy as np
 from numpy.typing import NDArray
 
 
+from opticam.instruments import Instrument
+
+
 def apply_barycentric_correction(
     original_times: float | NDArray,
-    coords: SkyCoord,
+    sky_coords: SkyCoord,
+    instrument: Instrument,
     ) -> NDArray:
     """
     Apply barycentric corrections to a time array.
@@ -16,8 +20,8 @@ def apply_barycentric_correction(
     ----------
     times : float | NDArray
         The time(s) to correct.
-    coords : SkyCoord
-        The coordinates of the source.
+    sky_coords : SkyCoord
+        The coordinates corresponding to the image.
     
     Returns
     -------
@@ -25,14 +29,11 @@ def apply_barycentric_correction(
         The corrected time(s).
     """
     
-    # OPTICAM location
-    observer_coords = EarthLocation.from_geodetic(lon=-115.463611*u.deg, lat=31.044167*u.deg, height=2790*u.m)
-    
     # format the times
-    times = Time(original_times, format='mjd', scale='utc', location=observer_coords)
+    times = Time(original_times, format='mjd', scale='utc', location=instrument.location)
     
     # compute light travel time to barycentre
-    ltt_bary = times.light_travel_time(coords)
+    ltt_bary = times.light_travel_time(sky_coords)
     
     return np.asarray((times.tdb + ltt_bary).value)
 

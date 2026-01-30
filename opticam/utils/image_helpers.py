@@ -1,6 +1,8 @@
 from numpy.typing import NDArray
 
 
+
+
 def rebin_image(
     image: NDArray,
     factor: int,

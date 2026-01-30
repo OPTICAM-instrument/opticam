@@ -4,7 +4,10 @@ from numpy.typing import NDArray
 from photutils.background import Background2D
 from photutils.segmentation import SourceCatalog, SourceFinder
 
+
 from opticam.background.global_background import BaseBackground
+
+
 
 
 class DefaultFinder:
@@ -48,6 +51,8 @@ class DefaultFinder:
         tbl.sort('segment_flux', reverse=True)
         
         return tbl
+
+
 
 
 def get_source_coords_from_image(

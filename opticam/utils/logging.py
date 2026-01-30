@@ -1,79 +1,93 @@
 import json
+import logging
+from logging import Logger
 import os
+from pathlib import Path
+import sys
 from types import FunctionType
-from typing import Any, Dict, List
-
-from astropy.io import fits
-
-from opticam.utils.constants import pixel_scales
+from typing import Any
 
 
-def log_binnings(
-    file_paths: List[str],
-    out_directory: str,
-    ) -> None:
+
+
+def configure_logger(
+    out_directory: Path,
+    verbose: bool,
+    ) -> Logger:
     """
-    Log the binning of each file to out_directory/diag/binnings.json.
+    Configure the reduction logger.
     
     Parameters
     ----------
-    file_paths : List[str]
-        The paths to the files.
-    out_directory : str
-        The directory to save the log.
+    out_directory : Path
+        The path to the directory in which the log file will be written.
+    verbose : bool
+        Whether to also output to stdout.
+    
+    Returns
+    -------
+    Logger
+        The logger.
     """
     
-    file_binnings = {}
+    logger = logging.getLogger('OPTICAM')
+    logger.setLevel(logging.DEBUG)
     
-    for file in file_paths:
-        with fits.open(file) as hdul:
-            binning = hdul[0].header["BINNING"]
-        if binning in file_binnings:
-            file_binnings[binning].append(file)
-        else:
-            file_binnings[binning] = [file]
+    # clear existing handlers
+    if logger.hasHandlers():
+        logger.handlers.clear()
+    
+    # create file handler
+    file_handler = logging.FileHandler(os.path.join(out_directory, 'info.log'))
+    file_handler.setLevel(logging.DEBUG)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    
+    # create console handler
+    if verbose:
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(logging.INFO)
+        formatter = logging.Formatter('[%(name)s] %(message)s')
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
+    
+    return logger
+
+
+def log_file(
+    out_directory: Path,
+    file_name: str,
+    file_contents: dict[Any, Any],
+    ) -> None:
+    """
+    Log `file_contents` to a JSON file in `out_directory/diag/`.
+    
+    Parameters
+    ----------
+    out_directory : Path
+        The output directory.
+    file_name : str
+        The name of the diagnostic file. A `.json' suffix is automatically added.
+    file_contents : dict[Any, Any]
+        The contents that will be saved to the file.
+    """
     
     dir_path = os.path.join(out_directory, 'diag')
     if not os.path.isdir(dir_path):
         os.makedirs(dir_path, exist_ok=True)
     
-    file_path = os.path.join(dir_path, 'binnings.json')
+    if not file_name.endswith('.json'):
+        file_name += '.json'
+    
+    file_path = os.path.join(dir_path, file_name)
+    
     with open(file_path, "w") as json_file:
-        json.dump(file_binnings, json_file, indent=4)
-
-
-def log_filters(
-    file_paths: List[str],
-    out_directory: str,
-    ) -> None:
-    """
-    Logs the filters used in each file to out_directory/diag/filters.json.
-    
-    Parameters
-    ----------
-    file_paths : List[str]
-        The paths to the files.
-    out_directory : str
-        The directory to save the log.
-    """
-    
-    file_filters = {}
-    
-    for file in file_paths:
-        with fits.open(file) as hdul:
-            fltr = hdul[0].header["FILTER"]
-        if fltr in file_filters:
-            file_filters[fltr].append(file)
-        else:
-            file_filters[fltr] = [file]
-    
-    dir_path = os.path.join(out_directory, 'diag')
-    if not os.path.isdir(dir_path):
-        os.makedirs(dir_path, exist_ok=True)
-    
-    file_path = os.path.join(dir_path, 'filters.json')
-    with open(file_path, "w") as json_file:
-        json.dump(file_filters, json_file, indent=4)
+        json.dump(
+            file_contents,
+            json_file,
+            indent=4,
+            )
 
 
 def recursive_log(param: Any, depth: int = 0, max_depth: int = 5) -> Any:
@@ -113,10 +127,11 @@ def recursive_log(param: Any, depth: int = 0, max_depth: int = 5) -> Any:
 
 
 def log_psf_params(
-    out_directory: str,
-    psf_params: Dict[str, Dict[str, float]],
+    out_directory: Path,
+    psf_params: dict[str, dict[str, float]],
     binning_scale: int,
     rebin_factor: int,
+    pixel_scales: dict[str, float],
     ) -> None:
     """
     Log the PSF parameters.
@@ -125,12 +140,14 @@ def log_psf_params(
     ----------
     out_directory : str
         The path to the output directory.
-    psf_params : Dict[str, Dict[str, float]]
-        The PSF parameters.
+    psf_params : dict[str, dict[str, float]]
+        The PSF parameters {filter: {PSF param: value}}.
     binning_scale : int
         The observation binning scale.
     rebin_factor : int
         The software rebinning factor.
+    pixel_scales : dict[str, float]
+        The pixel scale for each filter in arcsec/pixel {filter: pixel scale}.
     """
     
     psf_params_full = {}

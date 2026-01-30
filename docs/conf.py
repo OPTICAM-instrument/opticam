@@ -11,8 +11,8 @@ from pathlib import Path
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 project = 'opticam'
-copyright = '2025, Zackery A. Irving'
-author = 'Zackery A. Irving'
+copyright = '2026, OPTICAM-instrument developers'
+author = 'Zackery A. Irving, Noel Castro Segura'
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
@@ -28,6 +28,15 @@ autodoc_typehints = 'description'
 
 templates_path = ['_templates']
 exclude_patterns = []
+
+nbsphinx_execute = 'never'
+
+EXECUTED = Path(__file__).parent.resolve() / '_executed'
+nbsphinx_notebook_dir = str(EXECUTED)
+
+nbsphinx_remove_cells = [
+    'remove-cell',
+    ]
 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output

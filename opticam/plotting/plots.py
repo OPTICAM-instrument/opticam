@@ -1,29 +1,40 @@
 import os.path
-from typing import Callable, Dict, List
+from pathlib import Path
+from typing import Any, Callable
 
+
+from astropy import units as u
+from astropy.units import Quantity
 from astropy.table import QTable
+from astropy.timeseries import TimeSeries
 from astropy.visualization import simple_norm
-from matplotlib.patches import Circle, Ellipse, Rectangle
 from matplotlib import pyplot as plt
+from matplotlib.patches import Circle, Ellipse, Rectangle
 from matplotlib.figure import Figure
 import numpy as np
 from numpy.typing import NDArray
 import pandas as pd
 from photutils.aperture import ApertureStats, BoundingBox
 
+
 from opticam.background.global_background import BaseBackground
+from opticam.correctors import DarkNoiseCorrector
+from opticam.instruments import Instrument
 from opticam.noise import characterise_noise, get_snrs
 from opticam.photometers import AperturePhotometer, get_growth_curve
 from opticam.fitting.models import gaussian
 from opticam.fitting.routines import fit_rms_vs_flux
 from opticam.utils.constants import catalog_colors, fwhm_scale
-from opticam.utils.helpers import sort_filters
+from opticam.mef_slice import MEFSlice
+from opticam.utils.helpers import get_lc, sort_dict_by_filters
+
+
 
 
 def plot_catalogs(
-    out_directory: str,
-    stacked_images: Dict[str, NDArray],
-    catalogs: Dict[str, QTable],
+    out_directory: Path,
+    stacked_images: dict[str, NDArray],
+    catalogs: dict[str, QTable],
     show: bool,
     save: bool,
     ) -> None:
@@ -32,28 +43,27 @@ def plot_catalogs(
     
     Parameters
     ----------
-    out_directory : str
-        The directory path to which the resulting plot will be saved.
-    filters : List[str]
-        The catalog filters.
-    stacked_images : Dict[str, NDArray]
+    out_directory : Path
+        The path to the directory in which the resulting plot will be saved.
+    stacked_images : dict[str, NDArray]
         The stacked images for each filter {filter: image}.
+    catalogs : dict[str, QTable]
+        The source catalogs for each filter {filter: catalog}.
     show : bool
         Whether to show the plot.
     save : bool
         Whether to save the plot.
     """
     
+    ncols: int = len(stacked_images)
+    
     fig, axes = plt.subplots(
-        ncols=len(stacked_images),
+        ncols=ncols,
         tight_layout=True,
-        figsize=(
-            len(stacked_images) * 5,
-            5,
-            ),
+        figsize=(ncols * 5, 5),
         )
     
-    if len(stacked_images) == 1:
+    if ncols == 1:
         axes = [axes]
     
     for i, fltr in enumerate(stacked_images):
@@ -94,6 +104,7 @@ def plot_catalogs(
                 catalogs[fltr]["ycentroid"][j] + 1.05 * radius,
                 j + 1,  # source number
                 color=catalog_colors[j % len(catalog_colors)],
+                fontsize='large',
                 )
             
             # label plot
@@ -112,9 +123,9 @@ def plot_catalogs(
 
 
 def plot_time_between_files(
-    out_directory: str,
-    camera_files: Dict[str, List[str]],
-    bmjds: Dict[str, float],
+    out_directory: Path,
+    camera_files: dict[str, list[MEFSlice]],
+    bmjds: dict[str, float],
     show: bool,
     save: bool,
     ) -> None:
@@ -123,23 +134,33 @@ def plot_time_between_files(
     
     Parameters
     ----------
-    out_directory : str
+    out_directory : Path
         The directory path to which the resulting plot will be saved.
-    camera_files : Dict[str, List[str]]
-        The file paths separated by camera {filter: file paths}.
-    bmjds : Dict[str, float]
-        The file time stamps {file path: time stamp}.
+    camera_files : dict[str, list[MEFSlice]]
+        The files separated by camera.
+    bmjds : dict[str, float]
+        The file time stamps {file path + extension: time stamp}.
     show : bool
         Whether to show the plot.
     save : bool
         Whether to save the plot.
     """
     
-    fig, axes = plt.subplots(nrows=3, ncols=len(camera_files), tight_layout=True,
-                                figsize=((2 * len(camera_files) / 3) * 6.4, 2 * 4.8), sharey='row')
+    ncols: int = len(camera_files)
+    
+    fig, axes = plt.subplots(
+        nrows=3,
+        ncols=ncols,
+        tight_layout=True,
+        figsize=((2 * ncols / 3) * 6.4, 2 * 4.8),
+        sharey='row',
+        gridspec_kw={
+            'wspace': 0,
+            },
+        )
     
     for fltr in list(camera_files.keys()):
-        times = np.array([bmjds[file] for file in camera_files[fltr]])
+        times = np.array([bmjds[file.key] for file in camera_files[fltr]])
         times -= times.min()
         times *= 86400  # convert to seconds from first observation
         dt = np.diff(times)  # get time between files
@@ -201,7 +222,7 @@ def plot_time_between_files(
 
 
 def plot_backgrounds(
-    out_directory: str,
+    out_directory: Path,
     t_ref: float,
     show: bool,
     save: bool,
@@ -211,7 +232,7 @@ def plot_backgrounds(
     
     Parameters
     ----------
-    out_directory : str
+    out_directory : Path
         The directory to which the background files, and where the resulting plot will be saved if `save=True`.
     t_ref : float
         The reference BMJD.
@@ -228,7 +249,7 @@ def plot_backgrounds(
         if file.endswith('_background.csv'):
             fltr = file.split('_')[0]
             background_files[fltr] = os.path.join(out_directory, f'diag/{file}')
-    background_files = sort_filters(background_files)
+    background_files = sort_dict_by_filters(background_files)
     
     fig, axes = plt.subplots(
         nrows=2,
@@ -284,21 +305,21 @@ def plot_backgrounds(
 
 
 def plot_background_meshes(
-    out_directory: str,
-    images: Dict[str, NDArray],
+    out_directory: Path,
+    images: dict[str, NDArray[np.float64]],
     background: BaseBackground,
     show: bool,
     save: bool,
     ) -> None:
     """
-    Plot the background mesh on top of some images.
+    Plot the background mesh on top a series of images.
     
     Parameters
     ----------
-    out_directory : str
+    out_directory : Path
         The path to the output directory.
-    images : Dict[str, NDArray]
-        The images. The keys should give the filters (or file names) and the values should be the images.
+    images : dict[str, NDArray[np.float64]]
+        The images {string: image}
     background: BaseBackground
         The background estimator.
     show : bool
@@ -355,11 +376,12 @@ def plot_background_meshes(
 def plot_growth_curves(
     image: NDArray,
     cat: QTable,
-    targets: int | List[int],
-    psf_params: Dict,
+    targets: int | list[int],
+    psf_params: dict,
+    read_noise: float,
     ) -> Figure:
     """
-    Plot the growth curves given a (stacked) image and a source catalog.
+    Plot the growth curves given a (stacked) image and corresponding source catalog.
     
     Parameters
     ----------
@@ -367,10 +389,12 @@ def plot_growth_curves(
         The image.
     cat : QTable
         The catalog corresponding to `image`.
-    targets : int | List[int]
+    targets : int | list[int]
         The target(s) for which growth curves are to be computed.
-    psf_params : Dict
+    psf_params : dict
         The PSF parameters.
+    read_noise : float
+        The instrument's readout noise.
     
     Returns
     -------
@@ -418,6 +442,7 @@ def plot_growth_curves(
             x_centroid=cat['xcentroid'][i],
             y_centroid=cat['ycentroid'][i],
             r_max = round(10 * psf_params['semimajor_sigma']),
+            read_noise=read_noise,
         )
         
         axes[i].step(
@@ -454,7 +479,7 @@ def plot_psf(
     fltr: str,
     a: float,
     b: float,
-    out_directory: str,
+    out_directory: Path,
     ) -> None:
     """
     Plot the PSF for given source.
@@ -473,7 +498,7 @@ def plot_psf(
         The semimajor standard deviation of the PSF.
     b : float
         The semiminor standard deviation of the PSF.
-    out_directory : str,
+    out_directory : Path,
         The save path.
     """
     
@@ -601,8 +626,8 @@ def plot_psf(
 
 
 def plot_rms_vs_median_flux(
-    lc_dir: str,
-    save_dir: str,
+    lc_dir: Path,
+    save_dir: Path,
     phot_label: str,
     show: bool = True,
     ) -> None:
@@ -611,9 +636,9 @@ def plot_rms_vs_median_flux(
     
     Parameters
     ----------
-    lc_dir : str
+    lc_dir : Path
         The light curve directory path.
-    save_dir : str
+    save_dir : Path
         The output directory path.
     phot_label : str
         The photometry label.
@@ -621,49 +646,46 @@ def plot_rms_vs_median_flux(
         Whether to show the plot, by default True.
     """
     
-    data = get_lc_rms_and_flux_dict(
-        lc_dir=lc_dir,
-        )
-    pl_fits = fit_rms_vs_flux(data)
+    data: dict[str, dict[str, dict[str, float]]] = get_lc_rms_and_flux_dict(lc_dir=lc_dir)
+    pl_fits: dict[str, dict[str, NDArray[np.float64]]] = fit_rms_vs_flux(data)
     
-    assert len(pl_fits) >= 1, f"[OPTICAM] No valid light curve files found in {lc_dir}."
+    ncols: int = len(pl_fits)
+    assert ncols > 0, f"[OPTICAM] No valid light curve files found in {lc_dir}."
     
     fig, axes = plt.subplots(
         nrows=2,
-        ncols=len(pl_fits),
+        ncols=ncols,
         tight_layout=True,
-        figsize=(5 * len(pl_fits), 5),
+        figsize=(2 / 3 * ncols * 6.4, 4.8),
         sharex='col',
+        sharey='row',
+        squeeze=False,
         gridspec_kw={
             'hspace': 0,
+            'wspace': 0,
             'height_ratios': [4, 1],
             },
         )
     
-    for fltr in data.keys():
-        if fltr in ['u-band', 'g-band']:
-            if len(pl_fits) == 1:
-                ax1 = axes[0]
-                ax2 = axes[1]
-            else:
-                ax1 = axes[0][0]
-                ax2 = axes[1][0]
-        elif fltr in ['r-band']:
-            if len(pl_fits) == 1:
-                ax1 = axes[0]
-                ax2 = axes[1]
-            else:
-                ax1 = axes[0][1]
-                ax2 = axes[1][1]
-        elif fltr in ['i-band', 'z-band']:
-            if len(pl_fits) == 1:
-                ax1 = axes[0]
-                ax2 = axes[1]
-            else:
-                ax1 = axes[0][2]
-                ax2 = axes[1][2]
-        else:
-            raise ValueError(f'[OPTICAM] Unrecognised filter: {fltr}.')
+    for i, fltr in enumerate(data.keys()):
+        ax1 = axes[0][i]
+        ax2 = axes[1][i]
+        
+        if i == 0:
+            ax1.set_ylabel(
+                'Flux RMS [counts]',
+                fontsize='large',
+                )
+            
+            ax2.set_ylabel(
+                '$\\frac{\\rm RMS}{\\rm model}$',
+                fontsize='xx-large',
+                )
+        
+        ax2.set_xlabel(
+            'Median flux [counts]',
+            fontsize='large',
+            )
         
         ax1.set_title(
             fltr,
@@ -707,6 +729,7 @@ def plot_rms_vs_median_flux(
                 values['rms'] * 1.03,
                 str(source_number),
                 color=color,
+                fontsize='large',
                 )
             
             ax2.scatter(
@@ -724,10 +747,6 @@ def plot_rms_vs_median_flux(
                 )
         
         ax1.set_yscale('log')
-        ax1.set_ylabel(
-            'Flux RMS [counts]',
-            fontsize='large',
-            )
         
         ax2.plot(
             pl_fits[fltr]['flux'],
@@ -746,41 +765,34 @@ def plot_rms_vs_median_flux(
         
         lo, hi = ax2.get_ylim()
         ax2.set_ylim(lo * 0.95, hi * 1.05)
-        ax2.set_xlabel(
-            'Median flux [counts]',
-            fontsize='large',
-            )
-        ax2.set_ylabel(
-            'RMS / model',
-            fontsize='large',
-            )
     
     for ax in axes.flatten():
         ax.set_xscale('log')
         ax.minorticks_on()
         ax.tick_params(which='both', direction='in', top=True, right=True)
     
-    fig.savefig(os.path.join(save_dir, f'{phot_label}_rms_vs_median.pdf'))
+    fig.savefig(os.path.join(save_dir, f'{phot_label}_rms_vs_median.pdf'), bbox_inches='tight')
     
     if show:
         plt.show(fig)
     else:
         plt.close(fig)
 
+
 def get_lc_rms_and_flux_dict(
-    lc_dir: str,
-    ) -> Dict[str, Dict[str, Dict[str, float]]]:
+    lc_dir: Path,
+    ) -> dict[str, dict[str, dict[str, float]]]:
     """
     Get the RMS and median flux for a series of light curves.
     
     Parameters
     ----------
-    lc_dir : str
+    lc_dir : Path
         The directory path to the light curves.
     
     Returns
     -------
-    Dict[str, Dict[str, Dict[str, float]]]
+    dict[str, dict[str, dict[str, float]]]
         The median and RMS flux values for each light curve grouped by filter.
     """
     
@@ -799,26 +811,32 @@ def get_lc_rms_and_flux_dict(
         flux = flux
         
         median = np.median(flux)
-        rms = np.sqrt(np.mean(np.square(flux - np.mean(flux))))
+        if not np.isfinite(np.log10(median)):
+            continue
         
-        if not np.isnan(median) and not np.isnan(rms):
-            if fltr not in data.keys():
-                data[fltr] = {}
-            source_info = {
-                'rms': rms,
-                'flux': median,
-                }
-            data[fltr][source_number] = source_info
+        rms = np.std(flux)
+        if not np.isfinite(np.log10(rms)):
+            continue
+        
+        if fltr not in data.keys():
+            data[fltr] = {}
+        source_info = {
+            'rms': rms,
+            'flux': median,
+            }
+        data[fltr][source_number] = source_info
     
-    return data
+    return sort_dict_by_filters(data)
 
 
 def plot_snrs(
-    out_directory: str,
-    files: Dict[str, str],
+    out_directory: Path,
+    files: dict[str, MEFSlice],
     background: BaseBackground | Callable,
-    psf_params: Dict[str, Dict[str, float]],
-    catalogs: Dict[str, QTable],
+    psf_params: dict[str, dict[str, float]],
+    catalogs: dict[str, QTable],
+    instrument: Instrument,
+    dark_corrector: DarkNoiseCorrector,
     show: bool,
     save: bool,
     ):
@@ -827,39 +845,48 @@ def plot_snrs(
     
     Parameters
     ----------
-    out_directory : str
+    out_directory : Path
         The output directory.
-    files : Dict[str, str]
-        The reference files for each filter {filter: path to image}.
+    files : dict[str, MEFSlice]
+        The reference file for each filter.
     background : BaseBackground | Callable
         The global background estimator.
-    psf_params : Dict[str, Dict[str, float]]
+    psf_params : dict[str, dict[str, float]]
         The PSF parameters for each filter {filter: psf parameters}.
-    catalogs : Dict[str, QTable]
+    catalogs : dict[str, QTable]
         The catalogs for each filter {filter: catalog}.
-    photometer : BasePhotometer
-        The photometer to use for measuring noise.
+    instrument : Instrument
+        The instrument that produced the data.
+    dark_corrector : DarkNoiseCorrector
+        The dark noise corrector.
     show : bool
         Whether to show the plot.
     save : bool
         Whether to save the plot.
     """
     
+    ncols: int = len(files)
+    
     fig, axes = plt.subplots(
-        ncols=3,
+        ncols=ncols,
         tight_layout=True,
-        figsize=(15, 5),
+        figsize=(2 / 3 * ncols * 6.4, 5),
         )
+    
+    # in event of a single column, make axes subscriptable
+    if ncols == 1:
+        axes = [axes]
     
     for i, (fltr, file) in enumerate(files.items()):
         
-        source_ids = np.arange(len(catalogs[fltr])) + 1  # source IDs
-        snrs = np.round(
+        source_ids, snrs = np.round(
             get_snrs(
                 file=file,
                 background=background,
                 catalog=catalogs[fltr],
                 psf_params=psf_params[fltr],
+                instrument=instrument,
+                dark_corrector=dark_corrector,
                 ),
             1,
             )
@@ -909,11 +936,13 @@ def plot_snrs(
 
 
 def plot_noise(
-    out_directory: str,
-    files: Dict[str, str],
+    out_directory: Path,
+    files: dict[str, MEFSlice],
     background: BaseBackground | Callable,
-    psf_params: Dict[str, Dict[str, float]],
-    catalogs: Dict[str, QTable],
+    psf_params: dict[str, dict[str, float]],
+    catalogs: dict[str, QTable],
+    instrument: Instrument,
+    dark_corrector: DarkNoiseCorrector,
     show: bool,
     save: bool,
     ):
@@ -922,34 +951,41 @@ def plot_noise(
     
     Parameters
     ----------
-    out_directory : str
+    out_directory : Path
         The output directory.
-    files : Dict[str, str]
-        The reference files for each filter {filter: path to image}.
+    files : dict[str, MEFSlice]
+        The reference files for each filter.
     background : BaseBackground | Callable
         The global background estimator.
-    psf_params : Dict[str, Dict[str, float]]
+    psf_params : dict[str, dict[str, float]]
         The PSF parameters for each filter {filter: psf parameters}.
-    catalogs : Dict[str, QTable]
+    catalogs : dict[str, QTable]
         The catalogs for each filter {filter: catalog}.
-    photometer : BasePhotometer
-        The photometer to use for measuring noise.
+    instrument : Instrument
+        The instrument that produced the data.
+    dark_corrector : DarkNoiseCorrector
+        The dark noise corrector.
     show : bool
         Whether to show the plot.
     save : bool
         Whether to save the plot.
     """
     
+    ncols: int = len(files)
+    
     fig, axes = plt.subplots(
-        ncols=3,
+        ncols=ncols,
         nrows=2,
+        squeeze=False,
         tight_layout=True,
         sharex='col',
+        sharey='row',
         gridspec_kw={
             'hspace': 0,
+            'wspace': 0,
             'height_ratios': [4, 1],
             },
-        figsize=(15, 5),
+        figsize=(2 / 3 * ncols * 6.4, 5),
         )
     
     for i, (fltr, file) in enumerate(files.items()):
@@ -959,6 +995,8 @@ def plot_noise(
             background=background,
             catalog=catalogs[fltr],
             psf_params=psf_params[fltr],
+            instrument=instrument,
+            dark_corrector=dark_corrector,
             )
         
         axes[0][i].plot(results['model_mags'], results['effective_noise'], label='Effective noise', c='k', lw=1, zorder=3)
@@ -994,10 +1032,11 @@ def plot_noise(
         for j in range(len(results['measured_mags'])):
             axes[0][i].text(
                 results['measured_mags'][j],
-                results['measured_noise'][j] * 1.1,
+                results['measured_noise'][j] * 1.2,
                 f'{j + 1}',
                 ha='center',
                 va='bottom',
+                fontsize='large',
                 )
             
             r = results['measured_noise'][j] / results['expected_measured_noise'][j]
@@ -1009,6 +1048,7 @@ def plot_noise(
                 f'{j + 1}',
                 ha='center',
                 va='bottom',
+                fontsize='large',
                 )
             else:
                 axes[1][i].text(
@@ -1017,6 +1057,7 @@ def plot_noise(
                 f'{j + 1}',
                 ha='center',
                 va='top',
+                fontsize='large',
                 )
         
         axes[0][i].set_yscale('log')
@@ -1040,6 +1081,7 @@ def plot_noise(
         loc='lower center',
         ncol=6,
         bbox_transform=fig.transFigure,
+        fontsize='large',
         )
     
     if save:
@@ -1055,12 +1097,12 @@ def plot_noise(
 
 
 def plot_apertures(
-    out_directory: str,
+    out_directory: Path,
     data: NDArray,
     cat: QTable,
-    targets: List[int] | int,
+    targets: list[int] | int,
     photometer: AperturePhotometer,
-    psf_params: Dict[str, float],
+    psf_params: dict[str, float],
     fltr: str,
     show: bool,
     save: bool,
@@ -1070,17 +1112,17 @@ def plot_apertures(
     
     Parameters
     ----------
-    out_directory : str
+    out_directory : Path
         The output directory. Used to save the plot if `save=True`.
     data : NDArray
         The image data.
     cat : QTable
         The source catalog.
-    targets : List[int] | int
+    targets : list[int] | int
         The target IDs to plot apertures for.
     photometer : AperturePhotometer
         The `AperturePhotometer` instance.
-    psf_params : Dict[str, float]
+    psf_params : dict[str, float]
         The PSF parameters.
     fltr : str
         The image filter.
@@ -1105,6 +1147,11 @@ def plot_apertures(
     )
     
     axes = np.asarray([axes]).flatten()
+    
+    # delete axes that will not be used
+    excess_axes = axes.size - n
+    for i in range(1, 1 + excess_axes):
+        fig.delaxes(axes[-i])
     
     region_size = get_max_region_size(
         targets=targets,
@@ -1161,7 +1208,7 @@ def plot_apertures(
         
         # get region of interest
         region = data[bbox.iymin:bbox.iymax, bbox.ixmin:bbox.ixmax]
-        centre = [position[0] - bbox.ixmin, position[1] - bbox.iymin]  # centre of region
+        centre = (position[0] - bbox.ixmin, position[1] - bbox.iymin)  # centre of region
         
         axes[i].imshow(region, origin='lower', cmap='Greys', norm=simple_norm(region, stretch='log'))
         
@@ -1197,7 +1244,7 @@ def plot_apertures(
                                     ls='--',
                                     )
             axes[i].add_patch(inner_ellipse)
-
+            
             outer_ellipse = Ellipse(centre,
                                     width=annulus_outer_width,
                                     height=annulus_outer_height,
@@ -1239,27 +1286,28 @@ def plot_apertures(
         fig.clear()
         plt.close(fig)
 
+
 def get_max_region_size(
-    targets: List[int],
+    targets: list[int],
     photometer: AperturePhotometer,
-    data: NDArray,
+    data: NDArray[np.float64],
     cat: QTable,
-    psf_params: Dict[str, float],
+    psf_params: dict[str, float],
     ) -> int:
     """
     Get the maximum region size for plotting apertures.
     
     Parameters
     ----------
-    targets : List[int]
+    targets : list[int]
         The target source IDs.
     photometer : AperturePhotometer
         The `AperturePhotometer` instance.
-    data : NDArray
+    data : NDArray[np.float64]
         The image data.
     cat : QTable
         The source catalog.
-    psf_params : Dict[str, float]
+    psf_params : dict[str, float]
         The PSF parameters.
     
     Returns
@@ -1304,6 +1352,92 @@ def get_max_region_size(
     return max(region_sizes)
 
 
-
+def plot_light_curves(
+    filters: list[str],
+    light_curves: TimeSeries,
+    t_ref: Quantity | None,
+    y_label: Any = None,
+    ) -> Figure:
+    """
+    Plot a table of light curves using a dedicated subplot for each filter.
+    
+    Parameters
+    ----------
+    filters : list[str]
+        The light curve filters.
+    light_curves : TimeSeries
+        The light curves.
+    t_ref : Quantity
+        The reference time. Light curves are plotted in seconds from this reference time.
+    y_label : Any, optional
+        The y-axis label, by default `None`.
+    
+    Returns
+    -------
+    Figure
+        The resulting figure.
+    """
+    
+    nrows: int = len(filters)
+    
+    fig, axes = plt.subplots(
+        nrows=nrows,
+        figsize=(2 * 6.4, .5 * nrows * 4.8),
+        tight_layout=True,
+        sharex=True,
+        gridspec_kw={
+            "hspace": 0,
+            },
+        )
+    
+    if nrows == 1:
+        axes = [axes]
+    
+    if t_ref is None:
+        t_ref = light_curves.time.min()
+    
+    for i, fltr in enumerate(filters):
+        
+        lc = get_lc(light_curves, fltr)
+        
+        time = (lc['time'] - t_ref).to_value(u.s)
+        flux = lc[f'{fltr}_rel_flux'].value
+        flux_err = lc[f'{fltr}_rel_flux_err'].value
+        
+        axes[i].errorbar(
+            time,
+            flux,
+            flux_err,
+            marker='none',
+            linestyle='none',
+            ecolor='grey',
+            elinewidth=1,
+            alpha=.5,
+            )
+        axes[i].step(
+            time,
+            flux,
+            where='mid',
+            lw=1,
+            color='k',
+            label=fltr,
+            )
+        
+        axes[i].legend(
+            handlelength=0,
+            fontsize='x-large',
+            frameon=False,
+        )
+    
+    axes[-1].set_xlabel(f'Time from BMJD {t_ref.value:.4f} [s]', fontsize='large')
+    
+    if y_label is not None:
+        axes[nrows // 2].set_ylabel(f'{y_label}', fontsize='large')
+    
+    for ax in axes:
+        ax.minorticks_on()
+        ax.tick_params(which='both', direction='in', top=True, right=True)
+    
+    return fig
 
 

@@ -1,231 +1,171 @@
-from logging import Logger
-from typing import Dict, Tuple
+from pathlib import Path
 
-from astropy.coordinates import SkyCoord
+
 from astropy.io import fits
-from astropy.io.fits import Header
-from astropy.time import Time
-from astropy import units as u
-from ccdproc import cosmicray_lacosmic  # TODO: replace with astroscrappy to reduce dependencies?
+from ccdproc import cosmicray_lacosmic
 import numpy as np
 from numpy.typing import NDArray
 import os.path
 
-from opticam.correctors.flat_field_corrector import FlatFieldCorrector
-from opticam.utils.time_helpers import apply_barycentric_correction
+
+from opticam.correctors import BiasCorrector, DarkNoiseCorrector, FlatFieldCorrector
+from opticam.mef_slice import MEFSlice
 from opticam.utils.image_helpers import rebin_image
+from opticam.utils.time_helpers import apply_barycentric_correction
+from opticam.instruments import Instrument
+
+
 
 
 def get_header_info(
-    file: str,
+    file: MEFSlice,
+    instrument: Instrument,
     barycenter: bool,
-    logger: Logger | None,
-    ) -> Tuple[float | None, str | None, str | None, float | None, float | None]:
+    ) -> tuple[float, float, str, str]:
     """
-    Get the BMJD, filter, binning, gain, and dark current from a file header.
+    Get the timestamp, exposure length, filter, and binning of the file.
     
     Parameters
     ----------
-    file : str
-        The file path.
+    file : MEFSlice
+        The `MEFSlice` instance representing the file.
+    instrument : Instrument
+        The instrument that created the file.
     barycenter : bool
-        Whether to apply a Barycentric correction to the image time stamps.
-    logger : Logger | None
-        The logger.
+        Whether to apply a Barycentric correction to the image's timestamp.
     
     Returns
     -------
-    Tuple[float | None, str | None, str | None, float | None, float | None]
-        The BMJD, filter, binning, gain, and dark current.
+    Tuple[float | None, float | None, str | None, str | None, float | None]
+        The timestamp, exposure length, filter, and binning of the image.
     """
     
-    try:
-        header = get_header(file)
-        
-        dark_curr = float(header["DARKCURR"])  # type: ignore
-        binning = str(header["BINNING"])
-        gain = float(header["GAIN"])  # type: ignore
-        
-        try:
-            ra = header["RA"]
-            dec = header["DEC"]
-        except:
-            if logger:
-                logger.info(f"[OPTICAM] Could not find RA and DEC keys in {file} header.")
-            pass
-        
-        mjd = get_time(header, file)
-        fltr = str(header["FILTER"])
-        
-        if barycenter:
-            try:
-                # try to compute barycentric dynamical time
-                coords = SkyCoord(ra, dec, unit=(u.hourangle, u.deg))
-                bmjd = float(apply_barycentric_correction(mjd, coords))
-                return bmjd, fltr, binning, gain, dark_curr
-            except Exception as e:
-                if logger:
-                    logger.info(f"[OPTICAM] Could not compute BMJD for {file}: {e}. Skipping.")
-                return None, None, None, None, None
-    except Exception as e:
-        if logger:
-            logger.info(f'[OPTICAM] Could not read {file}: {e}. Skipping.')
-        return None, None, None, None, None
+    header = file.get_header()
+    exposure = float(header[instrument.exptime_kw])
+    fltr = instrument.get_filter(header=header)
+    binning = instrument.get_binning(header=header)
+    timestamp = instrument.get_mjd(header=header)
     
-    return mjd, fltr, binning, gain, dark_curr
-
-
-def get_time(
-    header: Header,
-    file: str,
-    ) -> float:
-    """
-    Parse the time from the header of a FITS file.
+    if barycenter:
+        sky_coords = instrument.get_sky_coord(header=header)
+        timestamp = float(apply_barycentric_correction(
+            timestamp,
+            sky_coords,
+            instrument=instrument,
+            ))
     
-    Parameters
-    ----------
-    header
-        The FITS file header.
-    file : str
-        The path to the file.
-    
-    Returns
-    -------
-    float
-        The time of the observation in MJD.
-    
-    Raises
-    ------
-    ValueError
-        If the time cannot be parsed from the header.
-    KeyError
-        If neither 'GPSTIME' nor 'UT' keys are found in the header.
-    """
-    
-    if "GPSTIME" in header.keys():
-        gpstime = header["GPSTIME"]
-        split_gpstime = gpstime.split(" ")
-        date = split_gpstime[0]
-        time = split_gpstime[1]
-        mjd = Time(date + "T" + time, format="fits").mjd
-    elif "UT" in header.keys():
-        try:
-            mjd = Time(header["UT"].replace(" ", "T"), format="fits").mjd
-        except:
-            try:
-                date = header['DATE-OBS']
-                time = header['UT'].split('.')[0]
-                mjd = Time(date + 'T' + time, format='fits').mjd
-            except:
-                raise ValueError('Could not parse time from ' + file + ' header.')
-    else:
-        raise KeyError(f"[OPTICAM] Could not find GPSTIME or UT key in {file} header.")
-    
-    return float(mjd)
+    return timestamp, exposure, fltr, binning
 
 
 def get_data(
-    file: str,
-    flat_corrector: FlatFieldCorrector | None,
+    file: MEFSlice,
+    instrument: Instrument,
     rebin_factor: int,
     remove_cosmic_rays: bool,
-    ) -> Tuple[NDArray, float]:
+    bias_corrector: BiasCorrector | None = None,
+    dark_corrector: DarkNoiseCorrector | None = None,
+    flat_corrector: FlatFieldCorrector | None = None,
+    ) -> tuple[
+        NDArray[np.float64],
+        float | NDArray[np.float64],
+        float | NDArray[np.float64],
+        float | NDArray[np.float64],
+        ]:
     """
-    Get the image data from a FITS file. The dark current "flux" contribution is automatically computed and subtracted
-    from the returned image.
+    Get the (calibrated) image data from a file.
     
     Parameters
     ----------
-    file : str
-        The file.
-    flat_corrector : FlatFieldCorrector | None
-        The `FlatFieldCorrector` instance (if specified).
+    file : MEFSlice
+        The `MEFSlice` instance representing the file.
+    instrument : Instrument
+        The instrument that created the file.
     rebin_factor : int
-        The rebin factor.
+        The image rebinning factor.
     remove_cosmic_rays : bool
         Whether to remove cosmic rays from the image.
+    bias_corrector : BiasCorrector | None, optional
+        The bias corrector, by default `None`. If `None`, no bias corrections are performed.
+    dark_corrector : DarkNoiseCorrector | None, optional
+        The dark noise corrector, by default `None`. If `None`, no dark noise corrections are performed.
+    flat_corrector : FlatFieldCorrector | None, optional
+        The flat-field corrector, by default `None`. If `None`, no flat-field corrections are performed.
     
     Returns
     -------
-    Tuple[NDArray, float]
-        The image data (after subtracting the dark current "flux" contribution) and the dark current "flux"
-        contribution.
-    
-    Raises
-    ------
-    ValueError
-        If `file` could not be opened.
+    Tuple[NDArray[np.float64], float | NDArray[np.float64], float | NDArray[np.float64], float | NDArray[np.float64]]
+        The corrected image and the master bias, dark, and flat variances. If any of the correctors are undefined,
+        the variance of that corrector is set to 0.
     """
     
-    try:
-        with fits.open(file) as hdul:
-            data = np.array(hdul[0].data, dtype=np.float64)
-            fltr = hdul[0].header["FILTER"] + '-band'
-            dark_curr = float(hdul[0].header["DARKCURR"])  # [electrons/pixel/s]
-            t_exp = float(hdul[0].header['EXPOSURE'])  # [s]
-    except Exception as e:
-        raise ValueError(f"[OPTICAM] Could not get image data from {file} due to the following exception: {e}.")
+    data, header = file.get_data_and_header()
+    fltr = instrument.get_filter(header=header)
     
-    # subtract dark current
-    dark_flux = dark_curr * t_exp
-    data -= dark_flux
+    ################################################# bias correction #################################################
     
-    if flat_corrector:
-        data = flat_corrector.correct(data, fltr)
+    if bias_corrector is not None:
+        data, bias_var = bias_corrector.correct(
+            image=data,
+            fltr=fltr,
+            )
+    else:
+        bias_var = 0.
+    
+    ############################################## dark noise correction ##############################################
+    
+    if dark_corrector is not None:
+        data, dark_var = dark_corrector.correct(
+            image=data,
+            fltr=fltr,
+            dark_flux=instrument.get_dark_flux(header=header),
+            )
+    else:
+        dark_var = 0.
+    
+    ############################################## flat-field correction ##############################################
+    
+    if flat_corrector is not None:
+        data, flat_var = flat_corrector.correct(
+            image=data,
+            fltr=fltr,
+            )
+    else:
+        flat_var = 0.
+    
+    ################################################# clip cosmic rays #################################################
     
     if remove_cosmic_rays:
         data = np.asarray(cosmicray_lacosmic(data, gain_apply=False)[0])
     
+    ###################################################### rebin ######################################################
+    
     if rebin_factor > 1:
         data = rebin_image(data, rebin_factor)
     
-    return data, dark_flux
-
-
-def get_header(
-    file: str,
-    ) -> fits.Header:
-    """
-    Get the header of a FITS file.
-    
-    Parameters
-    ----------
-    file : str
-        _description_
-
-    Returns
-    -------
-    fits.Header
-        _description_
-    """
-    
-    try:
-        with fits.open(file) as hdul:
-            header = hdul[0].header
-    except Exception as e:
-        raise ValueError(f"[OPTICAM] Could not get header information from {file} due to the following exception: {e}.")
-    
-    return header
+    return data, bias_var, dark_var, flat_var
 
 
 def save_stacked_images(
-    stacked_images: Dict[str, NDArray],
-    out_directory: str,
+    stacked_images: dict[str, NDArray],
+    out_directory: Path,
     overwrite: bool,
     ) -> None:
     """
-    Save the stacked images to a compressed FITS cube.
+    Save the stacked images to a compressed multi-extension FITS file.
     
     Parameters
     ----------
-    stacked_images : Dict[str, NDArray]
-        The stacked images (filter: stacked image).
+    stacked_images : dict[str, NDArray]
+        The stacked images {filter: stacked image}.
+    out_directory : Path
+        The path to the directory in which the stacked images will be saved.
+    overwrite : bool
+        Whether to overwrite the file if it already exists.
     """
     
     hdr = fits.Header()
     hdr['COMMENT'] = 'This FITS file contains stacked images for each filter.'
-    empty_primary = fits.PrimaryHDU(header=hdr)
-    hdul = fits.HDUList([empty_primary])
+    hdul = fits.HDUList([fits.PrimaryHDU(header=hdr)])
     
     for fltr, img in stacked_images.items():
         hdr = fits.Header()
@@ -240,19 +180,19 @@ def save_stacked_images(
 
 
 def get_stacked_images(
-    out_directory: str,
-    ) -> Dict[str, NDArray]:
+    out_directory: Path,
+    ) -> dict[str, NDArray[np.float64]]:
     """
-    Unpacked the stacked catalog images from out_directory/cat.
+    Unpacked the stacked catalog images from `out_directory/cat/stacked_images.fits.gz`.
     
     Parameters
     ----------
-    out_directory : str
-        The directory path to the reduction output.
+    out_directory : Path
+        The path to the directory containing the stacked images.
     
     Returns
     -------
-    Dict[str, NDArray]
+    Dict[str, NDArray[np.float64]]
         The stacked images {filter: image}.
     """
     
@@ -262,38 +202,9 @@ def get_stacked_images(
             if 'FILTER' not in hdu.header:
                 continue
             fltr = hdu.header['FILTER']
-            stacked_images[fltr] = np.asarray(hdu.data)
+            stacked_images[fltr] = np.asarray(hdu.data, dtype=np.float64)
     
     return stacked_images
-
-
-def get_image_noise_info(
-    file_path: str,
-    ) -> Tuple[NDArray, float, float]:
-    """
-    Given a FITS file, get the image and corresponding filter, exposure time, dark current, and gain.
-    
-    Parameters
-    ----------
-    file_path : str
-        The path to the FITS file.
-    
-    Returns
-    -------
-    Tuple[NDArray, float, Quantity]
-        The image, dark flux, and gain.
-    """
-    
-    gain = float(get_header(file=file_path)['GAIN'])  # type: ignore
-    
-    img, dark_flux = get_data(
-        file=file_path,
-        flat_corrector=None,
-        rebin_factor=1,
-        remove_cosmic_rays=False,
-        )
-    
-    return img, dark_flux, gain
 
 
 

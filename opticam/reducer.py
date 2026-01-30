@@ -1,56 +1,66 @@
 from functools import partial
 import json
-import logging
+from logging import Logger
 from multiprocessing import cpu_count
 import os
-from typing import Callable, Dict, List, Literal, Tuple
+from pathlib import Path
+from typing import Callable, Literal
 
+
+from astroalign import find_transform
 from astropy.table import QTable
 from matplotlib import pyplot as plt
 import numpy as np
 from numpy.typing import NDArray
 import pandas as pd
 from photutils.segmentation import detect_threshold
+from skimage.transform import SimilarityTransform, warp
 from tqdm.contrib.concurrent import process_map
 from tqdm import tqdm
 
-from opticam.align import align_batch
+
+from opticam.utils.transforms import find_translation
 from opticam.background.global_background import BaseBackground, DefaultBackground
-from opticam.correctors.flat_field_corrector import FlatFieldCorrector
+from opticam.correctors import BiasCorrector, DarkNoiseCorrector, FlatFieldCorrector
 from opticam.finders import DefaultFinder, get_source_coords_from_image
-from opticam.photometers import AperturePhotometer, BasePhotometer, perform_photometry
-from opticam.utils.batching import get_batches, get_batch_size
-from opticam.utils.constants import bar_format
-from opticam.utils.data_checks import check_data
+from opticam.instruments import Instrument, OPTICAM_MX
+from opticam.mef_slice import MEFSlice
+from opticam.photometers import AperturePhotometer, BasePhotometer
 from opticam.plotting.gifs import compile_gif, create_gif_frame
-from opticam.utils.fits_handlers import get_data, get_stacked_images, save_stacked_images
-from opticam.utils.logging import recursive_log, log_psf_params
 from opticam.plotting.plots import plot_backgrounds, plot_background_meshes, plot_catalogs, plot_growth_curves, \
     plot_time_between_files, plot_psf, plot_rms_vs_median_flux, plot_noise, plot_snrs, plot_apertures
+from opticam.utils.batching import get_batches, get_batch_size
+from opticam.utils.constants import bar_format
+from opticam.utils.data_checks import scan_data
+from opticam.utils.fits_handlers import get_data, get_stacked_images, save_stacked_images
+from opticam.utils.logging import configure_logger, log_psf_params, recursive_log
+
+
 
 
 class Reducer:
     """
-    Class for reducing OPTICAM data.
+    Class for reducing astronomical images.
     """
+
 
     def __init__(
         self,
-        out_directory: str,
-        data_directory: None | str = None,
-        c1_directory: None | str = None,
-        c2_directory: None | str = None,
-        c3_directory: None | str = None,
-        rebin_factor: int = 1,
-        flat_corrector: None | FlatFieldCorrector = None,
-        background: BaseBackground | None = None,
-        finder: None | Callable = None,
-        threshold: float = 5,
+        out_directory: Path | str,
+        data_directory: Path | str,
         aperture_selector: Callable = np.median,
-        remove_cosmic_rays: bool = False,
+        background: BaseBackground | None = None,
         barycenter: bool = True,
+        bias_corrector: BiasCorrector | None = None,
+        dark_corrector: DarkNoiseCorrector = DarkNoiseCorrector(),
+        finder: None | Callable = None,
+        flat_corrector: FlatFieldCorrector | None = None,
+        instrument: Instrument = OPTICAM_MX(),
         number_of_processors: int = cpu_count() // 2,
+        rebin_factor: int = 1,
+        remove_cosmic_rays: bool = False,
         show_plots: bool = True,
+        threshold: float = 5,
         verbose: bool = True
         ) -> None:
         """
@@ -58,53 +68,53 @@ class Reducer:
         
         Parameters
         ----------
-        out_directory: str
+        out_directory : Path | str
             The path to the directory to save the output files.
-        data_directory: str, optional
-            The path to the directory containing the data, by default `None`. If `None`, any of c1_directory, c2_directory,
-            or c3_directory must be defined. If data_directory is defined, c1_directory, c2_directory, and c3_directory
-            are ignored.
-        c1_directory: str, optional
-            The path to the directory containing the C1 data, by default `None`. If `None`, any of data_directory,
-            c2_directory, or c3_directory must be defined. This parameter is ignored if data_directory is defined.
-        c2_directory: str, optional
-            The path to the directory containing the C2 data, by default `None`. If `None`, any of data_directory,
-            c1_directory, or c3_directory must be defined. This parameter is ignored if data_directory is defined.
-        c3_directory: str, optional
-            The path to the directory containing the C3 data, by default `None`. If `None`, any of data_directory,
-            c1_directory, or c2_directory must be defined. This parameter is ignored if data_directory is defined.
+        data_directory : Path | str
+            The path to the directory containing the data. Data may be single- and/or multi-extension FITS files.
+        aperture_selector : Callable, optional
+            The aperture selector, by default `np.median`. This function is used to select the aperture size for
+            photometry. If a callable is provided, it should take a list of source sizes (`list[float]`) as input and
+            return a single value.
+        background : BaseBackground | None, optional
+            The background calculator, by default `None`. If `None`, the default background calculator is used. If a
+            callable is provided, it should take an image (`NDArray`) as input and return a `Background2D` object.
+        barycenter : bool, optional
+            Whether to apply a barycentric correction to the image timestamps, by default `True`.
+        bias_corrector : BiasCorrector | None, optional
+            The bias corrector, by default `None`. If `None`, no bias corrections are performed. See 
+            (TODO: link to corrections docs) for more details.
+        dark_corrector : DarkNoiseCorrector, optional,
+            The dark noise corrector, by default `DarkNoiseCorrector()`. To perform dark current corrections using
+            dark images, a custom `DarkNoiseCorrector` instance must be passed. See (TODO: link to corrections docs)
+            for more details.
+        finder : Callable, optional
+            The source finder, by default `None`. If `None`, the default source finder is used. If a callable is
+            provided, it should take an image (`NDArray`) and a threshold (`float | NDArray`) as input and return a
+            `QTable` instance. See (TODO: link to finders docs) for details.
+        flat_corrector : FlatFieldCorrector | None, optional,
+            The flat-field corrector, by default `None`. If `None`, no flat-field corrections are performed. See 
+            (TODO: link to corrections docs) for more details.
+        instrument : Instrument, optional
+            The instrument, by default `OPTICAM_MX()`. To use a custom instrument, see (TODO: link to instruments docs)
+            for details.
+        number_of_processors : int, optional
+            The number of processors to use for parallel processing, by default half the number of available processors.
         rebin_factor: int, optional
             The rebinning factor, by default 1 (no rebinning). The rebinning factor is the factor by which the image is
             rebinned in both dimensions. Rebinning can improve the detectability of faint sources and speed up
             some operations (like cosmic ray removal) at the cost of image resolution.
-        flat_corrector: FlatFieldCorrector, optional,
-            The flat-field corrector, by default `None`. If `None`, no flat-field corrections are applied.
-        threshold: float, optional
-            The signal-to-noise ratio threshold for source finding, by default 5. Reduce this value to identify fainter
-            sources, though this may lead to the identification of spurious sources.
-        background: BaseBackground | None, optional
-            The background calculator, by default `None`. If `None`, the default background calculator is used. If a
-            callable is provided, it should take an image (`NDArray`) as input and return a `Background2D` object.
-        finder: Callable, optional
-            The source finder, by default `None`. If `None`, the default source finder is used. If a callable is
-            provided, it should take an image (`NDArray`) and a threshold (`float | NDArray`) as input and return a
-            `QTable` instance.
-        aperture_selector: Callable, optional
-            The aperture selector, by default `np.median`. This function is used to select the aperture size for
-            photometry. If a callable is provided, it should take a list of source sizes (`List[float]`) as input and
-            return a single value.
-        remove_cosmic_rays: bool, optional
-            Whether to remove cosmic rays from images, by default False. Cosmic rays are removed using the LACosmic
+        remove_cosmic_rays : bool, optional
+            Whether to remove cosmic rays from images, by default `False`. Cosmic rays are removed using the LACosmic
             algorithm as implemented in `astroscrappy`. Note: this can be computationally expensive, particularly for
             large images.
-        barycenter: bool, optional
-            Whether to apply a barycentric correction to the image time stamps, by default True.
-        number_of_processors: int, optional
-            The number of processors to use for parallel processing, by default half the number of available processors.
-        show_plots: bool, optional
+        show_plots : bool, optional
             Whether to show plots as they're created, by default `True`. Whether `True` or `False`, plots are always
             saved to `out_directory`.
-        verbose: bool, optional
+        threshold : float, optional
+            The signal-to-noise ratio threshold for source finding, by default 5. Reduce this value to identify fainter
+            sources, though this may lead to the identification of spurious sources.
+        verbose : bool, optional
             Whether to print verbose output, by default `True`.
         """
         
@@ -112,61 +122,43 @@ class Reducer:
         
         ########################################### out_directory ###########################################
         
-        self.out_directory = out_directory
+        self.out_directory = Path(out_directory)
         
         # create output directory if it does not exist
-        if not os.path.isdir(self.out_directory):
+        if not self.out_directory.is_dir():
             if self.verbose:
                 print(f"[OPTICAM] {self.out_directory} not found, attempting to create ...")
             # create output directory if it does not exist
             try:
                 os.makedirs(self.out_directory)
-            except:
-                raise FileNotFoundError(f"[OPTICAM] Could not create directory {self.out_directory}")
+            except Exception as e:
+                raise FileNotFoundError(f"[OPTICAM] Could not create directory {self.out_directory} due to the following exception: {e}.")
             if self.verbose:
                 print(f"[OPTICAM] {self.out_directory} created.")
         
+        
         ########################################### logger ###########################################
         
-        # configure logger
-        self.logger = logging.getLogger('OPTICAM')
-        self.logger.setLevel(logging.INFO)
-        
-        # clear existing handlers
-        if self.logger.hasHandlers():
-            self.logger.handlers.clear()
-        
-        # create file handler
-        file_handler = logging.FileHandler(os.path.join(self.out_directory, 'info.log'))
-        file_handler.setLevel(logging.INFO)
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        file_handler.setFormatter(formatter)
-        self.logger.addHandler(file_handler)
+        self.logger = configure_logger(
+            out_directory=self.out_directory,
+            verbose=self.verbose,
+            )
         
         ########################################### sub-directories ###########################################
         
         # create subdirectories
-        if not os.path.isdir(os.path.join(self.out_directory, "cat")):
-            os.makedirs(os.path.join(self.out_directory, "cat"))
-        if not os.path.isdir(os.path.join(self.out_directory, "diag")):
-            os.makedirs(os.path.join(self.out_directory, "diag"))
-        if not os.path.isdir(os.path.join(self.out_directory, "misc")):
-            os.makedirs(os.path.join(self.out_directory, "misc"))
-        
-        ########################################### data directories ###########################################
-        
-        self.data_directory = data_directory
-        self.c1_directory = c1_directory
-        self.c2_directory = c2_directory
-        self.c3_directory = c3_directory
-        
-        assert self.data_directory is not None or self.c1_directory is not None or self.c2_directory is not None or self.c3_directory is not None, "[OPTICAM] At least one of data_directory, c1_directory, c2_directory, or c3_directory must be defined."
+        if not self.out_directory.joinpath("cat").is_dir():
+            os.makedirs(self.out_directory.joinpath("cat"))
+        if not self.out_directory.joinpath("diag").is_dir():
+            os.makedirs(self.out_directory.joinpath("diag"))
+        if not self.out_directory.joinpath("misc").is_dir():
+            os.makedirs(self.out_directory.joinpath("misc"))
         
         ########################################### input params ###########################################
         
-        # set some useful parameters
+        self.data_directory = Path(data_directory)
         self.rebin_factor = rebin_factor
-        self.flat_corrector = flat_corrector
+        self.instrument = instrument
         self.aperture_selector = aperture_selector
         self.threshold = threshold
         self.remove_cosmic_rays = remove_cosmic_rays
@@ -176,18 +168,51 @@ class Reducer:
         
         ########################################### check input data ###########################################
         
-        self.camera_files, self.binning_scale, self.bmjds, self.ignored_files, self.gains, dark_currs, self.t_ref = check_data(
-                data_directory=data_directory,
-                c1_directory=c1_directory,
-                c2_directory=c2_directory,
-                c3_directory=c3_directory,
-                out_directory=out_directory,
+        self.camera_files, self.binning_scale, self.bmjds, self.ignored_files, self.t_ref = scan_data(
+                data_directory=self.data_directory,
+                out_directory=self.out_directory,
+                instrument=self.instrument,
                 barycenter=self.barycenter,
-                verbose=verbose,
+                verbose=self.verbose,
                 return_output=True,
                 logger=self.logger,
-                number_of_processors=number_of_processors,
-                )  # type: ignore
+                number_of_processors=self.number_of_processors,
+                )
+        
+        ########################################### correctors ###########################################
+        
+        self.bias_corrector = bias_corrector
+        if self.bias_corrector is not None:
+            errors = self.bias_corrector.run_checks(
+                data_files_by_filter=self.camera_files,
+                return_errors=True,
+                )
+            if errors == 1:
+                raise ValueError(f'[OPTICAM] {errors} BiasCorrector error needs to be resolved.')
+            elif errors > 1:
+                raise ValueError(f'[OPTICAM] {errors} BiasCorrector errors need to be resolved.')
+        
+        self.dark_corrector = dark_corrector
+        if self.dark_corrector is not None:
+            errors = self.dark_corrector.run_checks(
+                data_files_by_filter=self.camera_files,
+                return_errors=True,
+                )
+            if errors == 1:
+                raise ValueError(f'[OPTICAM] {errors} DarkNoiseCorrector error needs to be resolved.')
+            elif errors > 1:
+                raise ValueError(f'[OPTICAM] {errors} DarkNoiseCorrector errors need to be resolved.')
+        
+        self.flat_corrector = flat_corrector
+        if self.flat_corrector is not None:
+            errors = self.flat_corrector.run_checks(
+                data_files_by_filter=self.camera_files,
+                return_errors=True,
+                )
+            if errors == 1:
+                raise ValueError(f'[OPTICAM] {errors} FlatFieldCorrector error needs to be resolved.')
+            elif errors > 1:
+                raise ValueError(f'[OPTICAM] {errors} FlatFieldCorrector errors need to be resolved.')
         
         ########################################### plot time between files ###########################################
         
@@ -198,10 +223,6 @@ class Reducer:
             show=self.show_plots,
             save=True,
             )
-        
-        ########################################### save dark currents ###########################################
-        
-        log_dark_current(self.out_directory, dark_currs, self.bmjds, self.camera_files)
         
         ########################################### define reference images ###########################################
         
@@ -222,11 +243,11 @@ class Reducer:
         if background is None:
             box_size = 2048 // self.binning_scale // self.rebin_factor // 32
             self.background = DefaultBackground(box_size)
-            self.logger.info(f'[OPTICAM] Using default background estimator with box_size={box_size}.')
+            self.logger.debug(f'Using default background estimator with box_size={box_size}.')
         elif callable(background):
             # use custom background estimator
             self.background = background
-            self.logger.info(f'[OPTICAM] Using custom background estimator {background.__class__.__name__} with parameters {background.__dict__}.')
+            self.logger.debug(f'Using custom background estimator {background.__class__.__name__} with parameters {background.__dict__}.')
         else:
             raise ValueError('[OPTICAM] background must be a callable or None. If None, the default background estimator is used.')
         
@@ -237,22 +258,23 @@ class Reducer:
             npixels = 128 // (2048 // effective_image_size)**2
             border_width = 2048 // self.binning_scale // self.rebin_factor // 16
             self.finder = DefaultFinder(npixels, border_width)
-            self.logger.info(f'[OPTICAM] Using default source finder with npixels={npixels} and border_width={border_width}.')
+            self.logger.debug(f'Using default source finder with npixels={npixels} and border_width={border_width}.')
         elif callable(finder):
             self.finder = finder
-            self.logger.info(f'[OPTICAM] Using custom source finder {finder.__class__.__name__} with parameters {finder.__dict__}.')
+            self.logger.debug(f'Using custom source finder {finder.__class__.__name__} with parameters {finder.__dict__}.')
         else:
             raise ValueError('[OPTICAM] finder must be a callable or None. If None, the default source finder is used.')
         
         ########################################### log input params ###########################################
         
+        # TODO: check if reduction_parameters.json already exists and, if so, that it matches that current parameters
         log_reducer_params(self)
         
         ########################################### misc attributes ###########################################
         
         self.transforms = {}  # define transforms as empty dictionary
         self.unaligned_files = []  # define unaligned files as empty list
-        self.catalogs : Dict[str, QTable] = {}  # define catalogs as empty dictionary
+        self.catalogs : dict[str, QTable] = {}  # define catalogs as empty dictionary
         self.psf_params = {}  # define PSF parameters as empty dictionary
         
         ########################################### read transforms ###########################################
@@ -262,7 +284,7 @@ class Reducer:
                 self.transforms.update(json.load(file))
             
             if self.verbose:
-                self.logger.info("[OPTICAM] Read transforms from file.")
+                self.logger.info("Read transforms from file.")
         
         ########################################### read catalogs ###########################################
         
@@ -281,8 +303,8 @@ class Reducer:
                     aperture_selector=self.aperture_selector,
                     catalog=self.catalogs[fltr],
                     )
-                if self.verbose:
-                    print(f"[OPTICAM] Read {fltr} catalog from file.")
+                
+                self.logger.info(f"Read {fltr} catalog from file.")
         
         ########################################### read unaligned files ###########################################
         
@@ -292,8 +314,8 @@ class Reducer:
                 for line in file:
                     self.unaligned_files.append(line)
             
-            if self.verbose:
-                    print(f"[OPTICAM] Read unaligned files from file.")
+            self.logger.info(f"Read unaligned files from file.")
+
 
     def create_catalogs(
         self,
@@ -301,7 +323,7 @@ class Reducer:
         n_alignment_sources: int = 15,
         transform_type: Literal['affine', 'translation'] = 'affine',
         rotation_limit: float | None = None,
-        translation_limit: float | int | List[float | int] | None = None,
+        translation_limit: float | int | list[float | int] | None = None,
         scale_limit: float | None = None,
         overwrite: bool = False,
         ) -> None:
@@ -326,7 +348,7 @@ class Reducer:
             The maximum rotation limit (in degrees) for affine transformations, by default `None` (no limit).
         scale_limit : float, optional
             The maximum scale limit for affine transformations, by default `None` (no limit).
-        translation_limit : float | int | List[float | int] | None, optional
+        translation_limit : float | int | list[float | int] | None, optional
             The maximum translation limit for both types of transformations, by default `None` (no limit). Can be a
             scalar value that applies to both x- and y-translations, or an iterable where the first value defines the
             x-translation limit and the second value defines the y-translation limit.
@@ -343,7 +365,7 @@ class Reducer:
         
         # if catalogs already exist, skip
         if os.path.isfile(os.path.join(self.out_directory, 'cat/catalogs.pdf')) and not overwrite:
-            print('[OPTICAM] Catalogs already exist. To overwrite, set overwrite=True.')
+            self.logger.info('Catalogs already exist. To overwrite, set overwrite=True.')
             
             plot_catalogs(
                 out_directory=self.out_directory,
@@ -355,22 +377,9 @@ class Reducer:
             
             return
         
-        if self.verbose:
-            print('[OPTICAM] Creating source catalogs')
+        self.logger.info('Creating source catalogs.')
         
         stacked_images = {}
-        
-        instance_align_batch = partial(
-            align_batch,
-            gains=self.gains,
-            flat_corrector=self.flat_corrector,
-            rebin_factor=self.rebin_factor,
-            remove_cosmic_rays=self.remove_cosmic_rays,
-            background=self.background,
-            finder=self.finder,
-            threshold=self.threshold,
-            logger=self.logger,
-        )
         
         # for each camera
         for fltr in self.camera_files.keys():
@@ -382,6 +391,9 @@ class Reducer:
             # get reference image
             reference_image = get_data(
                 file=self.reference_files[fltr],
+                instrument=self.instrument,
+                bias_corrector=self.bias_corrector,
+                dark_corrector=self.dark_corrector,
                 flat_corrector=self.flat_corrector,
                 rebin_factor=self.rebin_factor,
                 remove_cosmic_rays=self.remove_cosmic_rays,
@@ -391,26 +403,26 @@ class Reducer:
                 # get source coordinates in descending order of brightness
                 reference_coords = get_source_coords_from_image(
                     reference_image,
-                    finder=self.finder,
+                    finder=self.finder,  # type: ignore
                     threshold=self.threshold,
                     background=self.background,
                     n_sources=n_alignment_sources,
                     )
             except Exception as e:
-                self.logger.info(f'[OPTICAM] No sources detected in {fltr} reference image ({self.reference_files[fltr]}): {e}. Reducing threshold or npixels in the source finder may help.')
+                self.logger.error(f'No sources detected in {fltr} reference image ({self.reference_files[fltr]}): {e}. Reducing threshold or npixels in the source finder may help.')
                 continue
             
             if len(reference_coords) < n_alignment_sources and transform_type == 'translation':
-                self.logger.info(f'[OPTICAM] Found {len(reference_coords)} sources in {fltr} reference image ({self.reference_files[fltr]}) but n_alignment_sources={n_alignment_sources}. transform_type="translation" requires at least n_alignment_sources be detected in the reference image to work. Consider reducing n_alignment_sources and/or threshold, or using transform_type="affine".')
+                self.logger.error(f'Found {len(reference_coords)} sources in {fltr} reference image ({self.reference_files[fltr]}) but n_alignment_sources={n_alignment_sources}. transform_type="translation" requires at least n_alignment_sources be detected in the reference image to work. Consider reducing n_alignment_sources and/or threshold, or using transform_type="affine".')
                 continue
             
-            self.logger.info(f'[OPTICAM] {fltr} alignment source coordinates: {reference_coords}')
+            self.logger.debug(f'{fltr} alignment source coordinates: {reference_coords}')
             
             # align and stack images in batches
             batches = get_batches(self.camera_files[fltr])
             results = process_map(
                 partial(
-                    instance_align_batch,
+                    self._align_batch,
                     reference_image_shape=reference_image.shape,
                     reference_coords=reference_coords,
                     transform_type=transform_type,
@@ -432,18 +444,14 @@ class Reducer:
                 camera_files=self.camera_files[fltr],
                 transforms=self.transforms,
                 unaligned_files=self.unaligned_files,
-                verbose=self.verbose,
+                logger=self.logger,
                 )
             
-            try:
-                # estimate threshold for source detection
-                threshold = detect_threshold(
-                    stacked_image,
-                    nsigma=self.threshold,
-                    )
-            except Exception as e:
-                self.logger.info(f'[OPTICAM] Unable to estimate source detection threshold for {fltr} stacked image: {e}.')
-                continue
+            # estimate threshold for source detection
+            threshold = detect_threshold(
+                stacked_image,
+                nsigma=self.threshold,
+                )
             
             try:
                 # identify sources in stacked image
@@ -452,7 +460,7 @@ class Reducer:
                     threshold,
                     )
             except Exception as e:
-                self.logger.info(f'[OPTICAM] No sources detected in the stacked {fltr} stacked image: {e}. Reducing threshold may help.')
+                self.logger.error(f'No sources detected in the stacked {fltr} stacked image: {e}. Reducing threshold may help.')
                 continue
             
             # save stacked image
@@ -462,7 +470,7 @@ class Reducer:
             tbl = tbl[:max_catalog_sources]
             
             # save catalog
-            self.catalogs.update({fltr: tbl})
+            self.catalogs.update({fltr: tbl})  # type: ignore
             self.catalogs[fltr].write(
                 os.path.join(self.out_directory, f"cat/{fltr}_catalog.ecsv"),
                 format="ascii.ecsv",
@@ -486,6 +494,7 @@ class Reducer:
             psf_params=self.psf_params,
             binning_scale=self.binning_scale,
             rebin_factor=self.rebin_factor,
+            pixel_scales=self.instrument.pixel_scales
             )
         
         plot_catalogs(
@@ -520,6 +529,180 @@ class Reducer:
             unaligned_files=self.unaligned_files,
             )
 
+
+    def _align_batch(
+        self,
+        batch: list[MEFSlice],
+        reference_image_shape: tuple[int],
+        reference_coords: NDArray,
+        transform_type: Literal['affine', 'translation'],
+        rotation_limit: float | None,
+        scale_limit: float | None,
+        translation_limit: list[float] | None,
+        n_alignment_sources: int,
+        ) -> tuple[
+            NDArray[np.float64],
+            dict[str, list[float]],
+            dict[str, dict[str, float]],
+            list[tuple[str, str]],
+            ]:
+        """
+        Align a batch of images with respect to some reference coordinates.
+        
+        Parameters
+        ----------
+        batch: list[MEFSlice]
+            The files.
+        reference_image_shape : tuple[int]
+            The reference image's shape.
+        reference_coords : NDArray
+            The source coordinates in the reference image.
+        transform_type : Literal['affine', 'translation']
+            The type of transform to use for image alignment.
+        rotation_limit : float | None
+            The maximum rotation limit (in degrees) for image alignment.
+        scale_limit : float | None
+            The maximum scaling limit for image alignment.
+        translation_limit : list[float] | None
+            The maximum translation limit for image alignment.
+        n_alignment_sources : int
+            The (maximum) number of sources to use for image alignment.
+        
+        Returns
+        -------
+        tuple[NDArray[np.float64], dict[str, list[float]], dict[str, dict[str, float]], list[tuple[str, str]]]
+            The stacked image, transforms, background results, and log messages.
+        """
+        
+        stacked_image = np.zeros(reference_image_shape)  # create empty stacked image
+        transforms: dict[str, list[float]] = {}
+        bkg_dict: dict[str, dict[str, float]] = {}
+        queued_logs: list[tuple[str, str]] = []
+        
+        for file in batch:
+            data = get_data(
+                file=file,
+                instrument=self.instrument,
+                bias_corrector=self.bias_corrector,
+                dark_corrector=self.dark_corrector,
+                flat_corrector=self.flat_corrector,
+                rebin_factor=self.rebin_factor,
+                remove_cosmic_rays=self.remove_cosmic_rays,
+                )[0]
+            
+            # calculate and subtract background
+            bkg = self.background(data)
+            
+            # identify sources
+            try:
+                coords = get_source_coords_from_image(
+                    data,
+                    finder=self.finder,  # type: ignore
+                    threshold=self.threshold,
+                    bkg=bkg,
+                    )
+            except Exception as e:
+                queued_logs.append(('error', f'No sources detected in {file.path} extension {file.ext}: {e} Skipping.'))
+                continue
+            
+            if len(coords) < n_alignment_sources and transform_type == 'translation':
+                queued_logs.append(('error', f'{len(coords)} sources detected in {file.path} extension {file.ext} but n_alignment_sources={n_alignment_sources} and transform_type="translation". Skipping. To attempt to align images in which fewer than n_alignment_sources are detected, try transform_type="affine".'))
+                continue
+            
+            if transform_type == 'translation':
+                # find translation
+                transform = find_translation(
+                    coords,
+                    reference_coords,
+                    )
+            else:
+                # find affine transformation using astroalign
+                try:
+                    transform = find_transform(
+                        reference_coords,
+                        coords,
+                        max_control_points=n_alignment_sources,
+                        )[0]
+                except Exception as e:
+                    queued_logs.append(('error', f'Could not align {file.path} extension {file.ext} due to the following exception: {e}. Skipping.'))
+                    continue
+            
+            # validate transform
+            valid_transform, log_message = self._valid_transform(
+                file=file,
+                transform=transform,
+                rotation_limit=rotation_limit,
+                scale_limit=scale_limit,
+                translation_limit=translation_limit,
+                )
+            if not valid_transform:
+                queued_logs.append(log_message)
+                continue
+            
+            transforms[file.key] = transform.params.tolist()  # type: ignore
+            bkg_dict[file.key] = {
+                'Median': bkg.background_median,
+                'RMS': bkg.background_rms_median,
+                }
+            
+            # transform and stack image
+            stacked_image += warp(
+                data - bkg.background,
+                transform,
+                output_shape=reference_image_shape,
+                order=3,
+                mode='constant',
+                cval=0.,
+                clip=True,
+                preserve_range=True,
+                )
+        
+        return stacked_image, transforms, bkg_dict, queued_logs
+
+
+    def _valid_transform(
+        self,
+        file: MEFSlice,
+        transform: SimilarityTransform,
+        rotation_limit: float | None,
+        scale_limit: float | None,
+        translation_limit: list[float] | None,
+        ) -> tuple[bool, None | tuple[str, str]]:
+        """
+        Find whether a transform is valid given some transform limits.
+        
+        Parameters
+        ----------
+        file : MEFSlice
+            The path to the file being transformed.
+        transform : SimilarityTransform
+            The transform.
+        rotation_limit : float | None
+            The rotation limit.
+        scale_limit : float | None
+            The scale limit.
+        translation_limit : list[float] | None
+            The translation limit.
+        
+        Returns
+        -------
+        tuple[bool, None | tuple[str, str]]
+            Whether the transform is valid. If not, a log message is also returned as a tuple: (log level, log string).
+        """
+        
+        if rotation_limit:
+            if abs(transform.rotation) > rotation_limit:
+                return False, ('error', f'File {file.path} extension {file.ext} transform exceeded rotation limit. Rotation limit is {rotation_limit}, but rotation was {transform.rotation}.')
+        if scale_limit:
+            if transform.scale > scale_limit:
+                return False, ('error', f'File {file.path} extension {file.ext} transform exceeded scale limit. Scale limit is {scale_limit}, but scale was {transform.scale}.')
+        if translation_limit:
+            if abs(transform.translation[0]) > translation_limit[0] or abs(transform.translation[1]) > translation_limit[1]:
+                return False, ('error', f'File {file.path} extension {file.ext} transform exceeded translation limit. Translation limit is {translation_limit}, but translation was {transform.translation}.')
+        
+        return True, None
+
+
     def plot_background_meshes(
         self,
         save: bool = False,
@@ -537,7 +720,10 @@ class Reducer:
         try:
             images = get_stacked_images(self.out_directory)
         except FileNotFoundError:
-            images = get_random_image_for_each_filter(self.camera_files)
+            images = get_random_image_for_each_filter(
+                self.camera_files,
+                instrument=self.instrument,
+                )
             
             # subtract background
             for label, image in images.items():
@@ -552,9 +738,10 @@ class Reducer:
             save=save,
             )
 
+
     def plot_growth_curves(
         self,
-        targets: Dict[str, int | List[int]] | None = None,
+        targets: dict[str, int | list[int]] | None = None,
         save: bool = False,
         ) -> None:
         """
@@ -563,7 +750,7 @@ class Reducer:
         
         Parameters
         ----------
-        targets : Dict[str, int | List[int]] | None, optional
+        targets : dict[str, int | list[int]] | None, optional
             The targets for which growth curves will be created, by default `None` (growth curves are created for all
             catalog sources). To create growth curves for specific targets, pass a dictionary with keys listing the
             desired filters and values listing each filter's correpsonding target(s). For example:
@@ -571,9 +758,9 @@ class Reducer:
             # plot growth curves for the three brightest sources in each catalog
             plot_growth_curves(
                 targets = {
-                    'g-band': [1, 2, 3],
-                    'r-band': [1, 2, 3],
-                    'i-band': [1, 2, 3],
+                    'g': [1, 2, 3],
+                    'r': [1, 2, 3],
+                    'i': [1, 2, 3],
                     },
                 )
             ```
@@ -589,12 +776,12 @@ class Reducer:
         else:
             growth_curve_targets = targets
         
-        self.logger.info(f'[OPTICAM] Generating growth curves for targets: {repr(growth_curve_targets)}')
+        self.logger.info(f'Generating growth curves for targets: {repr(growth_curve_targets)}')
         
         for fltr, cat in self.catalogs.items():
             
             if fltr not in growth_curve_targets.keys():
-                self.logger.info(f'[OPTICAM] Filter {fltr} is not in target dictionary. Skipping.')
+                self.logger.error(f'Filter {fltr} is not in target dictionary. Skipping.')
                 continue
             
             fig = plot_growth_curves(
@@ -602,6 +789,7 @@ class Reducer:
                 cat=cat,
                 targets=growth_curve_targets[fltr],
                 psf_params=self.psf_params[fltr],
+                read_noise=self.instrument.read_noise,
                 )
             
             fig.suptitle(fltr, fontsize='large')
@@ -618,7 +806,8 @@ class Reducer:
             else:
                 plt.close(fig)
         
-        self.logger.info('[OPTICAM] Growth curves generated.')
+        self.logger.info('Growth curves generated.')
+
 
     def plot_psfs(
         self,
@@ -654,6 +843,7 @@ class Reducer:
                     out_directory=self.out_directory,
                 )
 
+
     def plot_snrs(
         self,
         save: bool = False,
@@ -673,9 +863,12 @@ class Reducer:
             background=self.background,
             psf_params=self.psf_params,
             catalogs=self.catalogs,
+            instrument=self.instrument,
+            dark_corrector=self.dark_corrector,
             show=self.show_plots,
             save=save,
         )
+
 
     def plot_noise(
         self,
@@ -696,9 +889,12 @@ class Reducer:
             background=self.background,
             psf_params=self.psf_params,
             catalogs=self.catalogs,
+            instrument=self.instrument,
+            dark_corrector=self.dark_corrector,
             show=self.show_plots,
             save=save,
             )
+
 
     def create_gifs(
         self,
@@ -707,7 +903,7 @@ class Reducer:
         ) -> None:
         """
         Create alignment gifs for each camera. Some aspects of this method are parallelised for speed. The frames are 
-        saved in out_directory/diag/*-band_gif_frames and the GIFs are saved in out_directory/cat.
+        saved in out_directory/diag/*_gif_frames and the GIFs are saved in out_directory/cat.
         
         Parameters
         ----------
@@ -725,7 +921,7 @@ class Reducer:
             if len(self.camera_files[fltr]) == 0:
                 continue
             elif os.path.exists(os.path.join(self.out_directory, f"cat/{fltr}_images.gif")) and not overwrite:
-                print(f"[OPTICAM] {fltr} GIF already exists. To overwrite, set overwrite to True.")
+                self.logger.info(f"[OPTICAM] {fltr} GIF already exists. To overwrite, set overwrite to True.")
                 continue
             
             # create gif frames directory if it does not exist
@@ -740,13 +936,11 @@ class Reducer:
                     aperture_selector=self.aperture_selector,
                     catalog=self.catalogs[fltr],
                     fltr=fltr,
-                    gains=self.gains,
                     transforms=self.transforms,
                     reference_file=self.reference_files[fltr],
-                    flat_corrector=self.flat_corrector,
                     rebin_factor=self.rebin_factor,
-                    remove_cosmic_rays=self.remove_cosmic_rays,
                     background=self.background,
+                    instrument=self.instrument,
                     ),
                 self.camera_files[fltr],
                 max_workers=self.number_of_processors,
@@ -763,13 +957,13 @@ class Reducer:
                 fltr=fltr,
                 camera_files=self.camera_files,
                 keep_frames=keep_frames,
-                verbose=self.verbose,
                 )
+
 
     def plot_apertures(
         self,
         photometer: AperturePhotometer,
-        targets: Dict[str, int] | Dict[str, List[int]] | Dict[str, List[int] | int] | None = None,
+        targets: dict[str, int] | dict[str, list[int]] | dict[str, list[int] | int] | None = None,
         save: bool = False,
         ) -> None:
         """
@@ -780,7 +974,7 @@ class Reducer:
         photometer : AperturePhotometer
             The `AperturePhotometer` instance. If a local background estimator has been defined, this will also be
             plotted.
-        targets : Dict[str, int] | Dict[str, List[int]] | Dict[str, List[int] | int] | None
+        targets : dict[str, int] | dict[str, list[int]] | dict[str, list[int] | int] | None
             The targets for which apertures will be plotted, by default `None` (apertures are plotted for all
             sources). To plot apertures for specific targets, pass a dictionary with keys listing the
             desired filters and values listing each filter's correpsonding target(s). For example:
@@ -790,9 +984,9 @@ class Reducer:
             plot_apertures(
                 photometer=photometer,
                 targets = {
-                    'g-band': [1, 2, 3],
-                    'r-band': [1, 2, 3],
-                    'i-band': [1, 2, 3],
+                    'g': [1, 2, 3],
+                    'r': [1, 2, 3],
+                    'i': [1, 2, 3],
                     },
                 )
             ```
@@ -808,7 +1002,10 @@ class Reducer:
                 continue
             
             img = get_data(
-                self.reference_files[fltr],
+                file=self.reference_files[fltr],
+                instrument=self.instrument,
+                bias_corrector=self.bias_corrector,
+                dark_corrector=self.dark_corrector,
                 flat_corrector=self.flat_corrector,
                 rebin_factor=self.rebin_factor,
                 remove_cosmic_rays=self.remove_cosmic_rays,
@@ -825,6 +1022,7 @@ class Reducer:
                 show=self.show_plots,
                 save=save,
             )
+
 
     def photometry(
         self,
@@ -846,40 +1044,30 @@ class Reducer:
         # define save directory using the photometer name
         save_name = photometer.get_label()
         
-        print(f'[OPTICAM] Photometry results will be saved to lcs/{save_name} in {self.out_directory}.')
+        self.logger.info(f'[OPTICAM] Photometry results will be saved to lcs/{save_name} in {self.out_directory}.')
         
-        save_dir = os.path.join(self.out_directory, f"lcs/{save_name}")
+        save_dir = self.out_directory.joinpath(f"lcs/{save_name}")
         if not os.path.isdir(save_dir):
             os.makedirs(save_dir)
         
         # for each filter
         for fltr in self.catalogs.keys():
             if os.path.isfile(os.path.join(save_dir, f'{fltr}_source_1.csv')) and not overwrite:
-                print(f'[OPTICAM] Skipping {fltr} since existing light curves files were found. To overwrite these files, set overwrite=True.')
+                self.logger.info(f'[OPTICAM] Skipping {fltr} since existing light curves files were found. To overwrite these files, set overwrite=True.')
                 continue
             
-            source_coords = np.array([self.catalogs[fltr]["xcentroid"].value,
-                                      self.catalogs[fltr]["ycentroid"].value]).T
+            source_coords = np.array([self.catalogs[fltr]["xcentroid"].value,  # type: ignore
+                                      self.catalogs[fltr]["ycentroid"].value],  # type:ignore
+                                     ).T
             
             files = [file for file in self.camera_files[fltr] if file not in self.unaligned_files]
             batch_size = get_batch_size(len(files))
             results = process_map(
                 partial(
-                    perform_photometry,
+                    self._perform_photometry,
                     photometer=photometer,
                     source_coords=source_coords,
-                    gains=self.gains,
-                    bmjds=self.bmjds,
-                    barycenter=self.barycenter,
-                    flat_corrector=self.flat_corrector,
-                    rebin_factor=self.rebin_factor,
-                    remove_cosmic_rays=self.remove_cosmic_rays,
-                    background=self.background,
-                    threshold=self.threshold,
-                    finder=self.finder,
-                    psf_params=self.psf_params,
                     fltr=fltr,
-                    logger=self.logger,
                 ),
                 files,
                 max_workers=self.number_of_processors,
@@ -900,40 +1088,105 @@ class Reducer:
         
         plot_rms_vs_median_flux(
             lc_dir=save_dir,
-            save_dir=os.path.join(self.out_directory, 'diag'),
+            save_dir=self.out_directory.joinpath('diag'),
             phot_label=save_name,
             show=self.show_plots,
             )
 
+
+    def _perform_photometry(
+        self,
+        file: MEFSlice,
+        photometer: BasePhotometer,
+        source_coords: NDArray,
+        fltr: str,
+        ) -> dict[str, list]:
+        """
+        Perform photometry on a file.
+        
+        Parameters
+        ----------
+        file : MEFSlice
+            The file.
+        photometer : BasePhotometer
+            The photometer to use.
+        source_coords : NDArray
+            The coordinates of the sources.
+        fltr : str
+            The image filter.
+        
+        Returns
+        -------
+        dict[str, list]
+            The photometry results.
+        """
+        
+        image, bias_var, dark_var, flat_var = get_data(
+            file=file,
+            instrument=self.instrument,
+            bias_corrector=self.bias_corrector,
+            dark_corrector=self.dark_corrector,
+            flat_corrector=self.flat_corrector,
+            rebin_factor=self.rebin_factor,
+            remove_cosmic_rays=self.remove_cosmic_rays,
+            )
+        
+        if photometer.local_background_estimator is None:
+            bkg = self.background(image)  # get 2D background
+            image -= bkg.background  # remove background from image
+            threshold = self.threshold * bkg.background_rms  # define source detection threshold
+            background_rms = bkg.background_rms.copy()
+        else:
+            # estimate source detection threshold from noisy image
+            threshold = detect_threshold(image, self.threshold)
+            background_rms = None
+        
+        image_coords = None  # assume no image coordinates by default
+        if not photometer.forced:
+            tbl = self.finder(image, threshold)
+            image_coords = np.array([tbl["xcentroid"].value,
+                                    tbl["ycentroid"].value],
+                                    ).T
+        
+        results = photometer.compute(
+            image=image,
+            bias_var=bias_var,
+            dark_var=dark_var,
+            flat_var=flat_var,
+            background_rms=background_rms,
+            source_coords=source_coords,
+            image_coords=image_coords,
+            psf_params=self.psf_params[fltr],
+            read_noise=self.instrument.read_noise,
+            )
+        
+        # add time stamp
+        if self.barycenter:
+            results['BMJD'] = self.bmjds[file.key]
+        else:
+            results['MJD'] = self.bmjds[file.key]
+        
+        return results
+
+
     def update_unaligned_files(
         self,
-        files: str | List[str],
+        files: MEFSlice | list[MEFSlice],
         ) -> None:
         """
         Add one or more files to the list of unaligned files. Unaligned files are skipped when performing photometry.
         
         Parameters
         ----------
-        files : str | List[str]
+        files : MEFSlice | list[MEFSlice]
             The file or files.
         """
         
-        if isinstance(files, str):
+        if isinstance(files, MEFSlice):
             files = [files]
         
         for file in files:
-            if os.path.isfile(file):
-                self.unaligned_files.append(file)
-            elif os.path.isfile(os.path.join(str(self.data_directory), file)):
-                self.unaligned_files.append(os.path.join(str(self.data_directory), file))
-            elif os.path.isfile(os.path.join(str(self.c1_directory), file)):
-                self.unaligned_files.append(os.path.join(str(self.c1_directory), file))
-            elif os.path.isfile(os.path.join(str(self.c2_directory), file)):
-                self.unaligned_files.append(os.path.join(str(self.c2_directory), file))
-            elif os.path.isfile(os.path.join(str(self.c3_directory), file)):
-                self.unaligned_files.append(os.path.join(str(self.c3_directory), file))
-            else:
-                raise ValueError(f'[OPTICAM] file {file} could not be found.')
+            self.unaligned_files.append(file)
         
         save_unaligned_files(
             out_directory=self.out_directory,
@@ -967,7 +1220,6 @@ def log_reducer_params(
     # remove some parameters that are either already saved elsewhere or are not relevant
     params.pop('logger')
     params.pop('bmjds')
-    params.pop('gains')
     params.pop('camera_files')
     
     try:
@@ -995,9 +1247,9 @@ def log_reducer_params(
 
 def log_dark_current(
     out_directory: str,
-    dark_currs: Dict[str, float],
-    bmjds: Dict[str, float],
-    camera_files: Dict[str, List[str]],
+    dark_currs: dict[str, float],
+    bmjds: dict[str, float],
+    camera_files: dict[str, list[str]],
     ) -> None:
     """
     Save the dark currents for each filter.
@@ -1006,11 +1258,11 @@ def log_dark_current(
     ----------
     out_directory : str
         The path to the output directory.
-    dark_currs : Dict[str, float]
+    dark_currs : dict[str, float]
         The dark current for each file {file: dark current}.
-    bmjds : Dict[str, float]
+    bmjds : dict[str, float]
         The time stamp for each file {file: time stamp}.
-    camera_files : Dict[str, List[str]]
+    camera_files : dict[str, list[str]]
         The files grouped by filter {filter: files}.
     """
     
@@ -1028,7 +1280,7 @@ def log_dark_current(
 def set_psf_params(
     aperture_selector: Callable,
     catalog: QTable,
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
     """
     Set the PSF parameters.
     
@@ -1041,13 +1293,13 @@ def set_psf_params(
     
     Returns
     -------
-    Dict[str, float]
+    dict[str, float]
         The PSF parameters.
     """
     
-    semimajor_sigma_pix = aperture_selector(catalog['semimajor_sigma'].value)
-    semiminor_sigma_pix = aperture_selector(catalog['semiminor_sigma'].value)
-    orientation = aperture_selector(catalog['orientation'].value)
+    semimajor_sigma_pix = aperture_selector(catalog['semimajor_sigma'].value)  # type: ignore
+    semiminor_sigma_pix = aperture_selector(catalog['semiminor_sigma'].value)  # type: ignore
+    orientation = aperture_selector(catalog['orientation'].value)  # type: ignore
     
     return {
         'semimajor_sigma': semimajor_sigma_pix,
@@ -1057,50 +1309,58 @@ def set_psf_params(
 
 
 def parse_alignment_results(
-    results: Tuple,
-    camera_files: List[str],
-    transforms: Dict[str, List[float]],
-    unaligned_files: List[str],
-    verbose: bool,
-    ) -> Tuple[Dict[str, List[float]], List[str], NDArray, Dict[str, Dict[str, float]]]:
+    results: tuple,
+    camera_files: list[MEFSlice],
+    transforms: dict[str, list[float]],
+    unaligned_files: list[MEFSlice],
+    logger: Logger,
+    ) -> tuple[dict[str, list[float]], list[MEFSlice], NDArray[np.float64], dict[str, dict[str, float]]]:
     """
     Parse the alignment results.
     
     Parameters
     ----------
-    results : Tuple
+    results : tuple
         The alignment results.
-    camera_files : List[str]
-        The file paths for all files. 
-    transforms : Dict[str, List[float]]
+    camera_files : list[MEFSlice]
+        The files. 
+    transforms : dict[Path, list[float]]
         The image-to-image alignments {file path: transform}.
-    unaligned_files : List[str]
-        The paths of the files that could not be aligned.
-    verbose : bool
-        Whether to include output.
+    unaligned_files : list[MEFSlice]
+        The files that could not be aligned.
+    logger : Logger
+        The logger.
     
     Returns
     -------
-    Tuple[Dict[str, List[float]], List[str], NDArray, Dict[str, float], Dict[str, float]]
+    tuple[dict[str, list[float]], list[str], NDArray, dict[str, float], dict[str, float]]
         The updated transforms, unaligned files, stacked image, median background values and median background RMS
         values.
     """
     
-    fltr_transforms = {}
-    fltr_unaligned_files = []
-    fltr_background = {}
+    fltr_transforms: dict[str, list[float]] = {}
+    fltr_unaligned_files: list[MEFSlice] = []
+    fltr_background: dict[str, dict[str, float]] = {}
+    queued_logs: list[tuple[str, str]] = []
     
     # unpack results
-    batch_stacked_images, batch_transforms, batch_backgrounds = zip(*results)
+    batch_stacked_images, batch_transforms, batch_backgrounds, batch_queued_logs = zip(*results)
     
     # combine results
     for i in range(len(batch_stacked_images)):
         fltr_transforms.update(batch_transforms[i])
         fltr_background.update(batch_backgrounds[i])
+        queued_logs += batch_queued_logs[i]
+    
+    # write log messages
+    write_queued_logs(
+        queued_logs=queued_logs,
+        logger=logger,
+        )
     
     aligned_files = list(fltr_transforms.keys())
     for file in camera_files:
-        if file not in aligned_files:
+        if file.key not in aligned_files:
             fltr_unaligned_files.append(file)
     
     stacked_image = np.sum(batch_stacked_images, axis=0)  # stack images
@@ -1108,33 +1368,54 @@ def parse_alignment_results(
     transforms.update(fltr_transforms)  # update transforms to include current filter
     unaligned_files += fltr_unaligned_files  # update unaligned files
     
-    if verbose:
-        print(f"[OPTICAM] Done.")
-        print(f'[OPTICAM] {len(fltr_transforms)} image(s) aligned.')
-        print(f'[OPTICAM] {len(fltr_unaligned_files)} image(s) could not be aligned.')
+    logger.info(f"[OPTICAM] Done.")
+    logger.info(f'[OPTICAM] {len(fltr_transforms)} image(s) aligned.')
+    logger.info(f'[OPTICAM] {len(fltr_unaligned_files)} image(s) could not be aligned.')
     
     return transforms, unaligned_files, stacked_image, fltr_background
 
 
+def write_queued_logs(
+    queued_logs: list[tuple[str, str]],
+    logger: Logger,
+    ) -> None:
+    
+    for queued_log in queued_logs:
+        if len(queued_log) > 0:
+            level, message = queued_log
+            if level.lower() == 'debug':
+                logger.debug(message)
+            elif level.lower() == 'info':
+                logger.info(message)
+            elif level.lower() == 'warning':
+                logger.warning(message)
+            elif level.lower() == 'error':
+                logger.error(message)
+            elif level.lower() == 'critical':
+                logger.critical(message)
+            else:
+                raise ValueError(f'[OPTICAM] Unrecognised log level {level}.')
+
+
 def save_background(
-    out_directory: str,
-    background: Dict[str, Dict[str, float]],
+    out_directory: Path,
+    background: dict[str, dict[str, float]],
     fltr: str,
-    bmjds: Dict[str, float],
+    bmjds: dict[str, float],
     ) -> None:
     """
     Save the median background and its RMS to a CSV file.
     
     Parameters
     ----------
-    out_directory : str
+    out_directory : Path
         The output directory.
-    background : Dict[str, Dict[str, float]]
+    background : dict[Path, dict[str, float]]
         The background values for each file.
     fltr : str
         The corresponding filter.
-    bmjds : Dict[str, float]
-        The BMJD values for each file.
+    bmjds : dict[Path, float]
+        The BMJD values for each file {file path}.
     """
     
     df = pd.DataFrame.from_dict(background, orient='index').reset_index()
@@ -1151,40 +1432,43 @@ def save_background(
 
 
 def save_unaligned_files(
-    out_directory: str,
-    unaligned_files: List[str],
+    out_directory: Path,
+    unaligned_files: list[MEFSlice],
     ) -> None:
     """
     Save the unaligned files to a text file.
     
     Parameters
     ----------
-    out_directory : str
+    out_directory : Path
         The output directory.
-    unaligned_files : List[str]
+    unaligned_files : list[MEFSlice]
         The list of unaligned files.
     """
     
     if len(unaligned_files) > 0:
         with open(os.path.join(out_directory, "diag/unaligned_files.txt"), "w") as unaligned_file:
             for file in unaligned_files:
-                unaligned_file.write(file + "\n")
+                unaligned_file.write(str(file.key) + "\n")
 
 
 def get_random_image_for_each_filter(
-    camera_files: Dict[str, List[str]],
-    ) -> Dict[str, NDArray]:
+    camera_files: dict[str, list[MEFSlice]],
+    instrument: Instrument,
+    ) -> dict[str, NDArray]:
     """
     Choose a random image for each filter from a dictionary.
     
     Parameters
     ----------
-    camera_files : Dict[str, List[str]]
-        The filters and corresponding files in the data directory.
+    camera_files : dict[str, list[Path]]
+        The filters and corresponding files in the data directory {filter: [paths to images]}.
+    instrument : Instrument
+        The instrument.
     
     Returns
     -------
-    Dict[str, NDArray]
+    dict[str, NDArray]
         A dictionary containing a random file for each filter
     """
     
@@ -1193,10 +1477,10 @@ def get_random_image_for_each_filter(
     
     for files in camera_files.values():
         file = files[rng.choice(len(files))]  # choose a random file
-        file_name = file.split('/')[-1]  # get file name (final part of the file path)
+        file_name = file.path.name
         images[file_name] = get_data(
             file=file,
-            flat_corrector=None,
+            instrument=instrument,
             rebin_factor=1,
             remove_cosmic_rays=False,
             )[0]
@@ -1205,23 +1489,23 @@ def get_random_image_for_each_filter(
 
 
 def create_targets_dict(
-    catalogs: Dict[str, QTable],
-    ) -> Dict[str, List[int]]:
+    catalogs: dict[str, QTable],
+    ) -> dict[str, list[int]]:
     """
     Create a dictionary of target IDs for all catalog sources.
     
     Parameters
     ----------
-    catalogs : Dict[str, QTable]
+    catalogs : dict[str, QTable]
         The catalogs.
     
     Returns
     -------
-    Dict[str, List[int]]
+    dict[str, list[int]]
         The target IDs for all catalog sources.
     """
     
-    targets: Dict[str, List[int]] = {}
+    targets: dict[str, list[int]] = {}
     
     for fltr, cat in catalogs.items():
         targets[fltr] = []
@@ -1232,10 +1516,10 @@ def create_targets_dict(
 
 
 def save_photometry_results(
-    results: Tuple[Dict],
-    catalogs: Dict[str, QTable],
+    results: tuple[dict],
+    catalogs: dict[str, QTable],
     barycenter: bool,
-    save_dir: str,
+    save_dir: Path,
     fltr: str,
     ):
     """
@@ -1243,11 +1527,11 @@ def save_photometry_results(
     
     Parameters
     ----------
-    results : Tuple[Dict]
+    results : tuple[dict]
         The photometry results.
-    catalogs : Dict[str, QTable]
+    catalogs : dict[str, QTable]
         The source catalogs.
-    save_dir : str
+    save_dir : Path
         The save directory path.
     fltr : str
         The photometry filter.
@@ -1292,19 +1576,19 @@ def save_photometry_results(
             )
 
 def parse_photometry_results(
-    results: Tuple[Dict[str, List]],
-    ) -> Dict[str, List[List[float]]]:
+    results: tuple[dict[str, list]],
+    ) -> dict[str, list[list[float]]]:
     """
     Merge the multiprocessed photometry results into a single dictionary.
     
     Parameters
     ----------
-    results : Tuple[Dict[str, List]]
+    results : tuple[dict[str, list]]
         The multiprocessed photometry results.
     
     Returns
     -------
-    Dict[str, List[List[float]]]
+    dict[str, list[list[float]]]
         The photometry results in a single dictionary.
     """
     
@@ -1316,8 +1600,4 @@ def parse_photometry_results(
             photometry_results[key].append(value)
     
     return photometry_results
-
-
-
-
 

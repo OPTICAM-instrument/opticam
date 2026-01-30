@@ -4,8 +4,12 @@ authors:
   - family-names: Irving
     given-names: Zackery A.
     orcid: https://orcid.org/0009-0006-0951-3429
+  - family-names: Castro Segura
+    given-names: Noel
+    orcid: http://orcid.org/0000-0002-5870-0443
+
 title: "opticam"
-version: 0.4.0
+version: 0.6.0
 identifiers:
 #  - type: doi
 #    value: 10.5281/zenodo.1234
