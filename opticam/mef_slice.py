@@ -6,6 +6,10 @@ from astropy.io import fits
 from astropy.io.fits import Header
 import numpy as np
 from numpy.typing import NDArray
+from tqdm import tqdm
+
+
+from opticam.utils.constants import bar_format
 
 
 
@@ -67,7 +71,7 @@ class MEFSlice:
         """
         
         with fits.open(self.path) as hdul:
-            data = np.asarray(hdul[self.ext].data, dtype=np.float64)
+            data = hdul[self.ext].data.astype(np.float64)
         
         return data
 
@@ -84,7 +88,7 @@ class MEFSlice:
         
         with fits.open(self.path) as hdul:
             header = hdul[self.ext].header
-            data = np.asarray(hdul[self.ext].data, dtype=np.float64)
+            data = hdul[self.ext].data.astype(np.float64)
         
         return data, header
 
@@ -111,7 +115,9 @@ def create_file_paths(
     
     file_paths: list[MEFSlice] = []
     
-    for path in data_directory.glob('*fit*'):
+    fits_files = list(data_directory.glob('*fit*'))
+    
+    for path in tqdm(fits_files, desc='[OPTICAM] Scanning data directory', bar_format=bar_format):
         with fits.open(path) as hdul:
             for ext, hdu in enumerate(hdul):
                 if hdu.data is not None:

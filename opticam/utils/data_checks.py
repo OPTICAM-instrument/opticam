@@ -3,7 +3,6 @@ from logging import Logger
 from multiprocessing import cpu_count
 from pathlib import Path
 import re
-from typing import Callable
 import warnings
 
 
@@ -90,7 +89,7 @@ def scan_data(
         files,
         max_workers=number_of_processors,
         disable=not verbose,
-        desc="[OPTICAM] Scanning data directory",
+        desc="[OPTICAM] Parsing file headers",
         chunksize=chunksize,
         bar_format=bar_format,
         tqdm_class=tqdm)
@@ -120,17 +119,18 @@ def scan_data(
     
     t_ref = min(list(bmjds.values()))  # get reference BMJD
     
-    output = partial(
-        data_checks_output,
-        binning=binning,
-        camera_files=camera_files)
-    if logger:
-        output(func=logger.info)
-    if verbose:
-        output(func=print)
+    if logger is not None:
+        logger.info(f'Binning: {binning}')
+        logger.info(f'Filters: {", ".join(list(camera_files.keys()))}')
+        for fltr in list(camera_files.keys()):
+            logger.info(f'{len(camera_files[fltr])} {fltr} images.')
+    elif verbose:
+        print(f'Binning: {binning}')
+        print(f'Filters: {", ".join(list(camera_files.keys()))}')
+        for fltr in list(camera_files.keys()):
+            print(f'{len(camera_files[fltr])} {fltr} images.')
     
     if return_output:
-        
         return camera_files, get_binning_scale(binning), bmjds, ignored_files, t_ref
 
 
@@ -198,7 +198,7 @@ def parse_header_results(
             file_name='binnings.json',
             file_contents=binnings,
             )
-        string = f"[OPTICAM] Inconsistent binning detected. All images must have the same binning. Image binnings have been logged to {out_directory.joinpath('diag/binnings.json')}."
+        string = f"Inconsistent binning detected. All images must have the same binning. Image binnings have been logged to {out_directory.joinpath('diag/binnings.json')}."
         if logger is not None:
             logger.error(string)
         raise ValueError(string)
@@ -214,9 +214,9 @@ def parse_header_results(
         if np.any(dt > 10 * np.median(dt)):
             indices = np.where(dt > 10 * np.median(dt))[0]
             for index in indices:
-                string = f"[OPTICAM] Large time gap detected between {files[index].path.name} and {files[index + 1].path.name} ({dt[index]:.3f} s compared to the median time difference of {np.median(dt):.3f} s). This may cause alignment issues. If so, consider moving all files after this gap to a separate directory."
+                string = f"Large time gap detected between {files[index].path.name} and {files[index + 1].path.name} ({dt[index]:.3f} s compared to the median time difference of {np.median(dt):.3f} s). This may cause alignment issues. If so, consider moving all files after this gap to a separate directory."
                 warnings.warn(string)
-                if logger:
+                if logger is not None:
                     logger.warning(string)
     
     # check all images use the same exposure time
@@ -226,36 +226,12 @@ def parse_header_results(
             file_name='exposures.json',
             file_contents=exposures,
             )
-        string = f'[OPTICAM] Inconsistent exposure times detected. This is not necessarily a problem, but may cause issues with Fourier transforms later on. Image exposure times have been logged to {out_directory.joinpath('diag/exposures.json')}.'
-        if logger:
-            logger.warning(string)
+        string = f'Inconsistent exposure times detected. This is not necessarily a problem, but may cause issues with Fourier transforms later on. Image exposure times have been logged to {out_directory.joinpath('diag/exposures.json')}.'
+        if logger is not None:
+            logger.error(string)
         warnings.warn(string)
     
     return unique_binning, bmjds, filters, ignored_files
-
-
-def data_checks_output(
-    binning: str,
-    camera_files: dict[str, list[MEFSlice]],
-    func: Callable,
-    ) -> None:
-    """
-    Output the results of the data checks.
-    
-    Parameters
-    ----------
-    binning : str
-        The image binning.
-    camera_files : dict[str, list[MEFSlice]]
-        The image files separated by filter.
-    func : Callable
-        The output function (i.e., `print` or `logger.info`)
-    """
-    
-    func(f'[OPTICAM] Binning: {binning}')
-    func(f'[OPTICAM] Filters: {", ".join(list(camera_files.keys()))}')
-    for fltr in list(camera_files.keys()):
-        func(f'[OPTICAM] {len(camera_files[fltr])} {fltr} images.')
 
 
 def get_binning_scale(binning: str) -> int:
