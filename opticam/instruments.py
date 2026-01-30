@@ -1,11 +1,10 @@
 from abc import ABC
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any
 
 
 from astropy.coordinates import EarthLocation, SkyCoord
-from astropy.io import fits
 from astropy.io.fits import Header
 from astropy.time import Time
 import astropy.units as u
@@ -27,7 +26,7 @@ class Instrument(ABC):
     ----------
     location : EarthLocation
         The location of the observatory as an `astropy.coordinates.EarthLocation` object.
-    pixel_scales : Dict[str, float]
+    pixel_scales : dict[str, float]
         The pixel scales for each filter in arcsec/pixel {filter: pixel scale}.
     read_noise : float
         The detector's read noise in electrons/pixel.
@@ -53,7 +52,7 @@ class Instrument(ABC):
 
 
     location: EarthLocation
-    pixel_scales: Dict[str, float]
+    pixel_scales: dict[str, float]
     read_noise: float
     binning_kw: str = 'BINNING'
     dark_curr_kw: str = 'DARKCURR'
@@ -91,6 +90,8 @@ class Instrument(ABC):
         ValueError
             If the header of the file could not be read.
         """
+        
+        print(f'[OPTICAM] Checking instrument {self.__class__.__name__}.')
         
         if isinstance(file, Path) or isinstance(file, str):
             file = MEFSlice(path=Path(file).resolve(), ext=0)
@@ -351,7 +352,7 @@ class Instrument(ABC):
     def from_json(
         cls,
         file_path: Path | str | None = None,
-        config: Dict[str, Any] | None = None,
+        config: dict[str, Any] | None = None,
         ) -> 'Instrument':
         """
         Create an instrument from a configuration file/dictionary.
@@ -361,7 +362,7 @@ class Instrument(ABC):
         file_path : Path | str | None, optional
             The path to the configuration file, by default `None`. If `None`, a dictionary must be passed to `config`. 
             If a value is passed to `file_path`, `config` is ignored.
-        config : Dict[str, Any] | None, optional
+        config : dict[str, Any] | None, optional
             The configuration dictionary, by default `None`. If `None`, a path must be passed to `file_path`. If a value
             is passed to `file_path`, `config` is ignored.
         
@@ -486,13 +487,13 @@ def generate_instrument_json_template(out_directory: Path | str) -> None:
             )
 
 
-def create_template() -> Dict[str, Any]:
+def create_template() -> dict[str, Any]:
     """
     Create an instrument configuration template.
     
     Returns
     -------
-    Dict[str, Any]
+    dict[str, Any]
         The instrument configuration template.
     """
     
@@ -588,8 +589,7 @@ class OPTICAM_MX(Instrument):
         # get exposure time (in seconds)
         exposure = float(header[self.exptime_kw]) * u.s
         
-        # TODO: check if this should be + or -
-        # shift DATE-OBS to mid-exposure
+        # shift timestamp to mid-exposure
         mjd = np.asarray((obs_time + exposure / 2).mjd)
         
         return float(mjd)
