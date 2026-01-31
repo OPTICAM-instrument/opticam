@@ -83,21 +83,21 @@ class Reducer:
             Whether to apply a barycentric correction to the image timestamps, by default `True`.
         bias_corrector : BiasCorrector | None, optional
             The bias corrector, by default `None`. If `None`, no bias corrections are performed. See 
-            (TODO: link to corrections docs) for more details.
+            https://opticam.readthedocs.io/en/latest/_executed/applying_corrections.html for more details.
         dark_corrector : DarkNoiseCorrector, optional,
             The dark noise corrector, by default `DarkNoiseCorrector()`. To perform dark current corrections using
-            dark images, a custom `DarkNoiseCorrector` instance must be passed. See (TODO: link to corrections docs)
-            for more details.
+            dark images, a custom `DarkNoiseCorrector` instance must be passed. See
+            https://opticam.readthedocs.io/en/latest/_executed/applying_corrections.html for more details.
         finder : Callable, optional
             The source finder, by default `None`. If `None`, the default source finder is used. If a callable is
             provided, it should take an image (`NDArray`) and a threshold (`float | NDArray`) as input and return a
-            `QTable` instance. See (TODO: link to finders docs) for details.
+            `QTable` instance. See https://opticam.readthedocs.io/en/latest/_executed/finders.html for details.
         flat_corrector : FlatFieldCorrector | None, optional,
             The flat-field corrector, by default `None`. If `None`, no flat-field corrections are performed. See 
-            (TODO: link to corrections docs) for more details.
+            https://opticam.readthedocs.io/en/latest/_executed/applying_corrections.html for more details.
         instrument : Instrument, optional
-            The instrument, by default `OPTICAM_MX()`. To use a custom instrument, see (TODO: link to instruments docs)
-            for details.
+            The instrument, by default `OPTICAM_MX()`. To use a custom instrument, see
+            https://opticam.readthedocs.io/en/latest/_executed/instruments.html for details.
         number_of_processors : int, optional
             The number of processors to use for parallel processing, by default half the number of available processors.
         rebin_factor: int, optional
@@ -267,8 +267,7 @@ class Reducer:
         
         ########################################### log input params ###########################################
         
-        # TODO: check if reduction_parameters.json already exists and, if so, that it matches that current parameters
-        log_reducer_params(self)
+        self._log_params()
         
         ########################################### misc attributes ###########################################
         
@@ -315,6 +314,57 @@ class Reducer:
                     self.unaligned_files.append(line)
             
             self.logger.info(f"Read unaligned files from file.")
+
+
+    def _log_params(self) -> None:
+        """
+        Log the input parameters of a `Reducer` instance to file.
+        
+        Parameters
+        ----------
+        reducer : Reducer
+            The `Reducer` instance.
+        """
+        
+        # get parameters
+        params = dict(recursive_log(self, max_depth=5))
+        
+        params.update({'filters': list(self.camera_files.keys())})
+        
+        # remove some parameters that are either already saved elsewhere or are not relevant
+        params.pop('logger')
+        params.pop('bmjds')
+        params.pop('camera_files')
+        
+        try:
+            params.pop('transforms')
+        except KeyError:
+            pass
+        
+        try:
+            params.pop('unaligned_files')
+        except KeyError:
+            pass
+        
+        try:
+            params.pop('catalogs')
+        except KeyError:
+            pass
+        
+        # sort parameters
+        params = dict(sorted(params.items()))
+        
+        save_path = self.out_directory / 'misc' / 'reduction_parameters.json'
+        if save_path.is_file():
+            # check params match
+            with open(save_path, 'r') as file:
+                file_params = json.load(file)
+            if file_params != params:
+                raise ValueError(f'[OPTICAM] Cannot instantiate Reducer: incompatible reduction_parameters.json file found in out_directory/misc. Consider deleting the contents of out_directory to start from scratch, or instantiate the Reducer with the same parameters as those listed in the existing reduction_parameters.json file.')
+        else:
+            # write parameters to file
+            with open(save_path, "w") as file:
+                json.dump(params, file, indent=4)
 
 
     def create_catalogs(
@@ -1196,53 +1246,6 @@ class Reducer:
 
 
 ################### for a clearner UI, the following functions are intentionally not Reducer methods ###################
-
-
-
-
-def log_reducer_params(
-    reducer: Reducer,
-    ) -> None:
-    """
-    Log the input parameters of a `Reducer` instance to file.
-    
-    Parameters
-    ----------
-    reducer : Reducer
-        The `Reducer` instance.
-    """
-    
-    # get parameters
-    params = dict(recursive_log(reducer, max_depth=5))
-    
-    params.update({'filters': list(reducer.camera_files.keys())})
-    
-    # remove some parameters that are either already saved elsewhere or are not relevant
-    params.pop('logger')
-    params.pop('bmjds')
-    params.pop('camera_files')
-    
-    try:
-        params.pop('transforms')
-    except KeyError:
-        pass
-    
-    try:
-        params.pop('unaligned_files')
-    except KeyError:
-        pass
-    
-    try:
-        params.pop('catalogs')
-    except KeyError:
-        pass
-    
-    # sort parameters
-    params = dict(sorted(params.items()))
-    
-    # write parameters to file
-    with open(os.path.join(reducer.out_directory, "misc/reduction_parameters.json"), "w") as file:
-        json.dump(params, file, indent=4)
 
 
 def log_dark_current(
