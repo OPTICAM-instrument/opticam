@@ -109,6 +109,8 @@ def recursive_log(param: Any, depth: int = 0, max_depth: int = 5) -> Any:
         The logged parameter.
     """
     
+    ignore_keys = {"_hash"}
+    
     if depth > max_depth:
         return f"<Max depth ({max_depth}) reached>"
     
@@ -120,9 +122,9 @@ def recursive_log(param: Any, depth: int = 0, max_depth: int = 5) -> Any:
     if isinstance(param, (list, tuple, set)):
         return type(param)(recursive_log(item, depth + 1, max_depth) for item in param)
     if isinstance(param, dict):
-        return {key: recursive_log(value, depth + 1, max_depth) for key, value in param.items()}
+        return {key: recursive_log(value, depth + 1, max_depth) for key, value in param.items() if key not in ignore_keys}
     if hasattr(param, '__dict__'):
-        return {key: recursive_log(value, depth + 1, max_depth) for key, value in vars(param).items()}
+        return {key: recursive_log(value, depth + 1, max_depth) for key, value in vars(param).items() if key not in ignore_keys}
     return str(param)
 
 

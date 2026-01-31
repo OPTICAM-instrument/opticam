@@ -327,7 +327,7 @@ class Reducer:
         """
         
         # get parameters
-        params = dict(recursive_log(self, max_depth=5))
+        params = dict(recursive_log(self))
         
         params.update({'filters': list(self.camera_files.keys())})
         
@@ -356,13 +356,15 @@ class Reducer:
         
         save_path = self.out_directory / 'misc' / 'reduction_parameters.json'
         if save_path.is_file():
-            # check params match
+            # get existing params
             with open(save_path, 'r') as file:
                 file_params = json.load(file)
-            if file_params != params:
+            
+            # check params match
+            if json.dumps(file_params, sort_keys=True) != json.dumps(params, sort_keys=True):
                 raise ValueError(f'[OPTICAM] Cannot instantiate Reducer: incompatible reduction_parameters.json file found in out_directory/misc. Consider deleting the contents of out_directory to start from scratch, or instantiate the Reducer with the same parameters as those listed in the existing reduction_parameters.json file.')
         else:
-            # write parameters to file
+            # only write params to file if the file doesn't already exist
             with open(save_path, "w") as file:
                 json.dump(params, file, indent=4)
 
