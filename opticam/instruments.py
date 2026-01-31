@@ -138,13 +138,13 @@ class Instrument(ABC):
             self.get_binning(header=header)
         except Exception as e:
             errors += 1
-            print(f'[OPTICAM] ERROR: failed to read image binning for file {file.path} extension {file.ext} due to the exception {e} This is either due to an incorrect value being passed to binning_kw and/or your images do not contain a binning keyword. In the latter case, you will need to define a custom instrument with a custom get_binning() method. See (TODO: link) for details.')
+            print(f"[OPTICAM] ERROR: failed to read image binning for file {file.path} extension {file.ext} due to the exception {e} This is either due to an incorrect value being passed to binning_kw and/or your images do not contain a binning keyword. In the latter case, you will need to define a custom instrument with a custom get_binning() method. See https://opticam.readthedocs.io/en/latest/_executed/instruments.html#My-images-don't-contain-a-binning-keyword.-What-should-I-do? for details.")
         
         try:
             Time(self.get_mjd(header=header), format='mjd')
         except Exception as e:
             errors += 1
-            print(f'[OPTICAM] ERROR: Failed to parse the MJD of the image due the following exception: {e}. This is likely due to an incorrect value being passed to dateobs_kw and/or your images do not give timestamps in FITS format. In the latter case, you will need to define a custom instrument with a custom get_mjd() method. See (TODO: link) for details.')
+            print(f"[OPTICAM] ERROR: Failed to parse the MJD of the image due the following exception: {e}. This is likely due to an incorrect value being passed to dateobs_kw and/or your images do not give timestamps in FITS format. In the latter case, you will need to define a custom instrument with a custom get_mjd() method. See https://opticam.readthedocs.io/en/latest/_executed/instruments.html#Defining-an-instrument-from-the-opticam.Instrument-base-class for details.")
         
         ################################################### warnings ###################################################
         
@@ -163,11 +163,11 @@ class Instrument(ABC):
             self.get_sky_coord(header=header)
         except Exception as e:
             warnings += 1
-            print(f'[OPTICAM] Warning: {self.__class__.__name__}.get_sky_coord() failed due to the following exception: {e}. Barycentric correction will not be possible. If this is a mistake, check the specified RA and DEC keywords ({self.ra_kw} and {self.dec_kw}, respectively) are present in your image headers. If they are present, then they are likely in an unrecognised format. In this case, you will need to define a custom instrument with a custom get_sky_coord() method. See (TODO: link) for details.')
+            print(f'[OPTICAM] Warning: {self.__class__.__name__}.get_sky_coord() failed due to the following exception: {e}. Barycentric correction will not be possible. If this is a mistake, check the specified RA and DEC keywords ({self.ra_kw} and {self.dec_kw}, respectively) are present in your image headers. If they are present, then they are likely in an unrecognised format. In this case, you will need to define a custom instrument with a custom get_sky_coord() method. See https://opticam.readthedocs.io/en/latest/autoapi/opticam/instruments/index.html#opticam.instruments.Instrument.get_sky_coord for details.')
         
         if self.dark_curr_kw not in keys:
             warnings += 1
-            print(f'[OPTICAM] WARNING: {self.__class__.__name__}.dark_curr_kw ({self.dark_curr_kw}) is not a valid header keyword for file {file.path} extension {file.ext}. If no dark current is listed in the image headers, you will need to use a `opticam.DarkNoiseCorrector` instance to correct for dark noise. See (TODO: link) for details.')
+            print(f'[OPTICAM] WARNING: {self.__class__.__name__}.dark_curr_kw ({self.dark_curr_kw}) is not a valid header keyword for file {file.path} extension {file.ext}. If no dark current is listed in the image headers, you will need to use a `opticam.DarkNoiseCorrector` instance to correct for dark noise. See https://opticam.readthedocs.io/en/latest/_executed/applying_corrections.html#Dark-noise for details.')
         
         ################################################### summary ###################################################
         
@@ -522,11 +522,11 @@ def create_template() -> dict[str, Any]:
         'gain_kw': 'GAIN',
         '_gain_kw_description': "The header keyword that corresponds to the detector's gain value in electrons/ADU.",
         'dateobs_kw': 'DATE-OBS',
-        '_dateobs_kw_description': "The header keyword that corresponds to the image's timestamp in ISO 8601/FITS format (i.e., YYYY-MM-DDTHH:MM:SS[.sss]). If your instrument does not give timestamps in this format, you will need to define the instrument with a custom get_mjd() method. See [TODO: link to docs] for details.",
+        '_dateobs_kw_description': "The header keyword that corresponds to the image's timestamp in ISO 8601/FITS format (i.e., YYYY-MM-DDTHH:MM:SS[.sss]). If your instrument does not give timestamps in this format, you will need to define the instrument with a custom get_mjd() method. See https://opticam.readthedocs.io/en/latest/_executed/instruments.html#Defining-an-instrument-from-the-opticam.Instrument-base-class for details.",
         'ra_kw': 'RA',
-        '_ra_kw_description': "The header keyword that corresponds to the image's RA in units of hour angle. If your instrument does not give the RA in units of hour angle, you will need to define the instrument with a custom get_sky_coord() method. See [TODO: link to docs] for details.",
+        '_ra_kw_description': "The header keyword that corresponds to the image's RA in units of hour angle. If your instrument does not give the RA in units of hour angle, you will need to define the instrument with a custom get_sky_coord() method. See https://opticam.readthedocs.io/en/latest/autoapi/opticam/instruments/index.html#opticam.instruments.Instrument.get_sky_coord for details.",
         'dec_kw': 'DEC',
-        '_dec_kw_description': "The header keyword that corresponds to the image's DEC in units of degrees. If your instrument does not give the DEC in units of degrees, you will need to define the instrument with a custom get_sky_coord() method. See [TODO: link to docs] for details.",
+        '_dec_kw_description': "The header keyword that corresponds to the image's DEC in units of degrees. If your instrument does not give the DEC in units of degrees, you will need to define the instrument with a custom get_sky_coord() method. See https://opticam.readthedocs.io/en/latest/autoapi/opticam/instruments/index.html#opticam.instruments.Instrument.get_sky_coord for details.",
         }
 
 
