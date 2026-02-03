@@ -18,7 +18,7 @@ from photutils.aperture import ApertureStats, BoundingBox
 
 
 from opticam.background.global_background import BaseBackground
-from opticam.correctors import DarkNoiseCorrector
+from opticam.correctors import BiasCorrector, DarkNoiseCorrector, FlatFieldCorrector
 from opticam.instruments import Instrument
 from opticam.noise import characterise_noise, get_snrs
 from opticam.photometers import AperturePhotometer, get_growth_curve
@@ -942,7 +942,9 @@ def plot_noise(
     psf_params: dict[str, dict[str, float]],
     catalogs: dict[str, QTable],
     instrument: Instrument,
+    bias_corrector: BiasCorrector | None,
     dark_corrector: DarkNoiseCorrector,
+    flat_corrector: FlatFieldCorrector | None,
     show: bool,
     save: bool,
     ):
@@ -963,8 +965,12 @@ def plot_noise(
         The catalogs for each filter {filter: catalog}.
     instrument : Instrument
         The instrument that produced the data.
+    bias_corrector : BiasCorrector | None
+        The bias corrector.
     dark_corrector : DarkNoiseCorrector
         The dark noise corrector.
+    flat_corrector : FlatFieldCorrector | None
+        The flat-field corrector.
     show : bool
         Whether to show the plot.
     save : bool
@@ -996,14 +1002,26 @@ def plot_noise(
             catalog=catalogs[fltr],
             psf_params=psf_params[fltr],
             instrument=instrument,
+            bias_corrector=bias_corrector,
             dark_corrector=dark_corrector,
+            flat_corrector=flat_corrector,
             )
         
         axes[0][i].plot(results['model_mags'], results['effective_noise'], label='Effective noise', c='k', lw=1, zorder=3)
-        axes[0][i].plot(results['model_mags'], results['sky_noise'], ls='--', lw=1, label='Sky noise')
-        axes[0][i].plot(results['model_mags'], results['shot_noise'], ls='--', lw=1, label='Shot noise')
-        axes[0][i].plot(results['model_mags'], results['dark_noise'], ls='--', lw=1, label='Dark noise')
-        axes[0][i].plot(results['model_mags'], results['read_noise'], ls='--', lw=1, label='Read noise')
+        
+        axes[0][i].plot(results['model_mags'], results['sky_noise'], ls=(5, (10, 3)), lw=1, label='Sky noise')
+        
+        axes[0][i].plot(results['model_mags'], results['shot_noise'], ls=(0, (5, 5)), lw=1, label='Shot noise')
+        
+        if np.any(results['bias'] > 0):
+            axes[0][i].plot(results['model_mags'], results['bias'], ls=(0, (5, 1)), lw=1, label='Bias')
+        
+        axes[0][i].plot(results['model_mags'], results['dark_noise'], ls=(0, (3, 5, 1, 5)), lw=1, label='Dark noise')
+        
+        if np.any(results['flat'] > 0):
+            axes[0][i].plot(results['model_mags'], results['flat'], ls=(0, (3, 1, 1, 1)), lw=1, label='Flat')
+        
+        axes[0][i].plot(results['model_mags'], results['read_noise'], ls=(0, (3, 5, 1, 5, 1, 5)), lw=1, label='Read noise')
         
         axes[0][i].scatter(
             results['measured_mags'],
@@ -1079,7 +1097,7 @@ def plot_noise(
         *axes[0, 0].get_legend_handles_labels(),
         bbox_to_anchor=(.5, .97),
         loc='lower center',
-        ncol=6,
+        ncol=len(results),
         bbox_transform=fig.transFigure,
         fontsize='large',
         )
@@ -1420,7 +1438,14 @@ def plot_light_curves(
             where='mid',
             lw=1,
             color='k',
-            label=fltr,
+            )
+        
+        axes[i].plot(
+                [],
+                [],
+                marker='none',
+                linestyle='none',
+                label=fltr,
             )
         
         axes[i].legend(

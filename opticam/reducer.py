@@ -942,7 +942,9 @@ class Reducer:
             psf_params=self.psf_params,
             catalogs=self.catalogs,
             instrument=self.instrument,
+            bias_corrector=self.bias_corrector,
             dark_corrector=self.dark_corrector,
+            flat_corrector=self.flat_corrector,
             show=self.show_plots,
             save=save,
             )
