@@ -836,7 +836,9 @@ def plot_snrs(
     psf_params: dict[str, dict[str, float]],
     catalogs: dict[str, QTable],
     instrument: Instrument,
+    bias_corrector: BiasCorrector | None,
     dark_corrector: DarkNoiseCorrector,
+    flat_corrector: FlatFieldCorrector | None,
     show: bool,
     save: bool,
     ):
@@ -857,8 +859,12 @@ def plot_snrs(
         The catalogs for each filter {filter: catalog}.
     instrument : Instrument
         The instrument that produced the data.
+    bias_corrector : BiasCorrector | None
+        The bias corrector.
     dark_corrector : DarkNoiseCorrector
         The dark noise corrector.
+    flat_corrector : FlatFieldCorrector | None
+        The flat-field corrector.
     show : bool
         Whether to show the plot.
     save : bool
@@ -886,7 +892,9 @@ def plot_snrs(
                 catalog=catalogs[fltr],
                 psf_params=psf_params[fltr],
                 instrument=instrument,
+                bias_corrector=bias_corrector,
                 dark_corrector=dark_corrector,
+                flat_corrector=flat_corrector,
                 ),
             1,
             )
