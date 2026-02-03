@@ -276,8 +276,15 @@ class Analyzer:
                 power,
                 c='k',
                 lw=1,
-                label=fltr,
                 )
+            
+            axes[i].plot(
+                [],
+                [],
+                marker='none',
+                linestyle='none',
+                label=fltr,
+            )
             
             axes[i].legend(
                 handlelength=0,
@@ -495,7 +502,6 @@ class Analyzer:
                 ms=2,
                 ecolor='grey',
                 elinewidth=1,
-                label=fltr,
                 )
             
             if phase_bin:
@@ -506,6 +512,14 @@ class Analyzer:
                 color='k',
                 lw=1,
                 )
+            
+            axes[i].plot(
+                [],
+                [],
+                marker='none',
+                linestyle='none',
+                label=fltr,
+            )
             
             leg = axes[i].legend(
                 handlelength=0,
