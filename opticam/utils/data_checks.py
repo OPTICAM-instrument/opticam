@@ -14,7 +14,7 @@ from tqdm import tqdm
 from opticam.utils.constants import bar_format
 from opticam.utils.fits_handlers import get_header_info
 from opticam.mef_slice import create_file_paths, MEFSlice
-from opticam.utils.helpers import sort_dict_by_filters
+from opticam.utils.helpers import camera_and_filter_key, sort_dict_by_filters
 from opticam.utils.logging import log_file
 from opticam.instruments import Instrument
 
@@ -95,7 +95,7 @@ def scan_data(
         tqdm_class=tqdm)
     
     # unpack results
-    binning, bmjds, filters, ignored_files = parse_header_results(
+    binning, bmjds, cameras, filters, ignored_files = parse_header_results(
         results=results,
         files=files,
         out_directory=out_directory,
@@ -104,13 +104,20 @@ def scan_data(
     
     # for each unique filter
     for fltr in set(filters.values()):
-        camera_files.update({fltr: []})  # prepare dictionary entry
-        for file in files:
-            if file not in ignored_files:
-                if filters[file.key] == fltr:
-                    camera_files[fltr].append(file)  # add file name to dict list
+        for camera in set(cameras.values()):
+            key = camera_and_filter_key(camera, fltr)
+            camera_files.update({key: []})  # prepare dictionary entry
     
-    # sort camera files so filters match camera order
+    for file in files:
+        if file not in ignored_files:
+            key = camera_and_filter_key(cameras[file.key], filters[file.key])
+            camera_files[key].append(file)  # add file name to dict list
+    
+    # remove keys with no files
+    for key in list(camera_files.keys()):
+        if len(camera_files[key]) == 0:
+            camera_files.pop(key)
+    
     camera_files: dict[str, list[MEFSlice]] = sort_dict_by_filters(camera_files)
     
     # sort files by time
@@ -139,7 +146,7 @@ def parse_header_results(
     files: list[MEFSlice],
     out_directory: Path,
     logger: Logger | None,
-    ) -> tuple[str, dict[str, float], dict[str, str], list[MEFSlice]]:
+    ) -> tuple[str, dict[str, float], dict[str, str], dict[str, str], list[MEFSlice]]:
     """
     Parse the header info results.
     
@@ -156,8 +163,8 @@ def parse_header_results(
     
     Returns
     -------
-    tuple[str, dict[str, float], dict[str, str], list[MEFSlice]]
-        The binning scale, BMJD dates, filters, and ignored files.
+    tuple[str, dict[str, float], dict[str, str], dict[str, str], list[MEFSlice]]
+        The binning scale, BMJD dates, cameras, filters, and ignored files.
     
     Raises
     ------
@@ -170,11 +177,12 @@ def parse_header_results(
     binnings: dict[str, str] = {}
     bmjds: dict[str, float] = {}
     exposures: dict[str, float] = {}
+    cameras: dict[str, str] = {}
     filters: dict[str, str] = {}
     ignored_files: list[MEFSlice] = []
     
     # unpack results
-    raw_bmjds, raw_exposures, raw_filters, raw_binnings = zip(*results)
+    raw_bmjds, raw_exposures, raw_cameras, raw_filters, raw_binnings = zip(*results)
     
     # consolidate results
     for i in range(len(raw_bmjds)):
@@ -184,6 +192,7 @@ def parse_header_results(
             bmjds.update({key: raw_bmjds[i]})
             exposures.update({key: raw_exposures[i]})
             filters.update({key: raw_filters[i]})
+            cameras.update({key: raw_cameras[i]})
         else:
             ignored_files.append(files[i])
     
@@ -231,7 +240,7 @@ def parse_header_results(
             logger.error(string)
         warnings.warn(string)
     
-    return unique_binning, bmjds, filters, ignored_files
+    return unique_binning, bmjds, cameras, filters, ignored_files
 
 
 def get_binning_scale(binning: str) -> int:

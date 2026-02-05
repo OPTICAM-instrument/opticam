@@ -8,6 +8,9 @@ from types import FunctionType
 from typing import Any
 
 
+from opticam.utils.helpers import camera_key
+
+
 
 
 def configure_logger(
@@ -154,16 +157,16 @@ def log_psf_params(
     
     psf_params_full = {}
     
-    for fltr in psf_params.keys():
+    for key in psf_params.keys():
         # convert from pixels to arcsec
-        semimajor_sigma_arcsec = psf_params[fltr]['semimajor_sigma'] * binning_scale * rebin_factor * pixel_scales[fltr]
-        semiminor_sigma_arcsec = psf_params[fltr]['semiminor_sigma'] * binning_scale * rebin_factor * pixel_scales[fltr]
+        semimajor_sigma_arcsec = psf_params[key]['semimajor_sigma'] * binning_scale * rebin_factor * pixel_scales[camera_key(key)]
+        semiminor_sigma_arcsec = psf_params[key]['semiminor_sigma'] * binning_scale * rebin_factor * pixel_scales[camera_key(key)]
         
-        psf_params_full[fltr] = {
+        psf_params_full[key] = {
             'semimajor_sigma_arcsec': semimajor_sigma_arcsec,
-            'semimajor_sigma_pix': psf_params[fltr]['semimajor_sigma'],
+            'semimajor_sigma_pix': psf_params[key]['semimajor_sigma'],
             'semiminor_sigma_arcsec': semiminor_sigma_arcsec,
-            'semiminor_sigma_pix': psf_params[fltr]['semiminor_sigma'],
+            'semiminor_sigma_pix': psf_params[key]['semiminor_sigma'],
         }
     
     # save PSF params to JSON file

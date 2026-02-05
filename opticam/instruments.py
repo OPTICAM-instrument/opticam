@@ -32,6 +32,10 @@ class Instrument(ABC):
         The detector's read noise in electrons/pixel.
     binning_kw : str, optional
         The binning keyword, by default "BINNING".
+    camera_kw : str, optional
+        The keyword that uniquely identifies the camera that took the image, by default "INSTRUME". For single-camera
+        instruments, this keyword doesn't matter. For multi-camera instruments, however, it is used to apply 
+        calibrations like flats correctly.
     dark_curr_kw : str, optional
         The dark current keyword, by default "DARKCURR". Dark current values are assumed to be in 
         electrons/pixel.
@@ -55,6 +59,7 @@ class Instrument(ABC):
     pixel_scales: dict[str, float]
     read_noise: float
     binning_kw: str = 'BINNING'
+    camera_kw: str = 'INSTRUME'
     dark_curr_kw: str = 'DARKCURR'
     exptime_kw: str = 'EXPTIME'
     filter_kw: str = 'FILTER'
@@ -129,10 +134,10 @@ class Instrument(ABC):
         
         if self.filter_kw in keys:
             try:
-                self.pixel_scales[self.get_filter(header=header)]
+                self.pixel_scales[self.get_camera(header=header)]
             except Exception as e:
                 errors += 1
-                print(f'[OPTICAM] ERROR: {self.__class__.__name__}.pixel_scales does not contain a corresponding value for the filter {self.get_filter(header=header)}.')
+                print(f'[OPTICAM] ERROR: {self.__class__.__name__}.pixel_scales does not contain a corresponding value for the camera {self.get_camera(header=header)}.')
         
         try:
             self.get_binning(header=header)
@@ -147,9 +152,6 @@ class Instrument(ABC):
             print(f"[OPTICAM] ERROR: Failed to parse the MJD of the image due the following exception: {e}. This is likely due to an incorrect value being passed to dateobs_kw and/or your images do not give timestamps in FITS format. In the latter case, you will need to define a custom instrument with a custom get_mjd() method. See https://opticam.readthedocs.io/en/latest/_executed/instruments.html#Defining-an-instrument-from-the-opticam.Instrument-base-class for details.")
         
         ################################################### warnings ###################################################
-        
-        if errors > 0:
-            print()  # blank line for readibility
         
         if self.ra_kw not in keys:
             warnings += 1
@@ -170,9 +172,6 @@ class Instrument(ABC):
             print(f'[OPTICAM] WARNING: {self.__class__.__name__}.dark_curr_kw ({self.dark_curr_kw}) is not a valid header keyword for file {file.path} extension {file.ext}. If no dark current is listed in the image headers, you will need to use a `opticam.DarkNoiseCorrector` instance to correct for dark noise. See https://opticam.readthedocs.io/en/latest/_executed/applying_corrections.html#Dark-noise for details.')
         
         ################################################### summary ###################################################
-        
-        if errors > 0 or warnings > 0:
-            print()  # blank line for readibility
         
         if errors == 0:
             print(f'[OPTICAM] {self.__class__.__name__} sucessfully passed all checks.')
@@ -220,6 +219,34 @@ class Instrument(ABC):
         mjd = float(np.asarray(Time(timestamp, format="fits").mjd))
         
         return mjd
+
+
+    def get_camera(
+        self,
+        file: MEFSlice | None = None,
+        header: Header | None = None,
+        ) -> str:
+        """
+        Given the path to a FITS file, get the corresponding camera.
+        
+        Parameters
+        ----------
+        file : MEFSlice | None, optional
+            The `MEFSlice` instance corresponding to the file, by default `None`. If `None`, a `Header` must be passed
+            to `header` instead.
+        header : Header, optional
+            The header of the FITS file, by default `None`. If `None`, a `MEFSlice` must be passed to `file` instead.
+        
+        Returns
+        -------
+        str
+            A unique identifier for the camera.
+        """
+        
+        if file is not None:
+            header = file.get_header()
+        
+        return str(header[self.camera_kw])
 
 
     def get_sky_coord(
@@ -534,8 +561,7 @@ def create_template() -> dict[str, Any]:
 
 class OPTICAM_MX(Instrument):
     """
-    OPTICAM-MX instrument. For use with OPTICAM-MX data taken after 2022. For OPTICAM-MX observations taken in 2022,
-    use `OPTICAMMX2022` instead.
+    OAN-SPM OPTICAM-MX instrument.
     """
 
 
@@ -547,16 +573,9 @@ class OPTICAM_MX(Instrument):
             height=2790 * u.m,
             ),
         pixel_scales = {
-            'u': 0.1397,
-            "u'": 0.1397,
-            'g': 0.1397,
-            "g'": 0.1397,
-            'r': 0.1406,
-            "r'": 0.1406,
-            'i': 0.1661,
-            "i'": 0.1661,
-            'z': 0.1661,
-            "z'": 0.1661,
+            '1': 0.1397,
+            '2': 0.1406,
+            '3': 0.1661,
             },
         read_noise = 1.1,
         exptime_kw='EXPOSURE',
@@ -593,6 +612,27 @@ class OPTICAM_MX(Instrument):
         mjd = np.asarray((obs_time + exposure / 2).mjd)
         
         return float(mjd)
+
+
+    def get_camera(
+        self,
+        file: MEFSlice | None = None,
+        header: Header | None = None,
+        ) -> str:
+        
+        if file is not None:
+            header = file.get_header()
+        
+        fltr = self.get_filter(header=header)
+        
+        if fltr in ["u", "u'", "g", "g'"]:
+            return '1'
+        elif fltr in ["r", "r'"]:
+            return '2'
+        elif fltr in ["i", "i'"]:
+            return '3'
+        
+        return 'None'
 
 
 

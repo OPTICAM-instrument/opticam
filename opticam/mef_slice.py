@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
+import warnings
 
 
 from astropy.io import fits
@@ -118,9 +119,12 @@ def create_file_paths(
     fits_files = list(data_directory.glob('*fit*'))
     
     for path in tqdm(fits_files, desc='[OPTICAM] Scanning data directory', bar_format=bar_format):
-        with fits.open(path) as hdul:
-            for ext, hdu in enumerate(hdul):
-                if hdu.data is not None:
-                    file_paths.append(MEFSlice(path=path.resolve(), ext=ext))
+        try:
+            with fits.open(path.resolve()) as hdul:
+                for ext, hdu in enumerate(hdul):
+                    if hdu.data is not None:
+                        file_paths.append(MEFSlice(path=path.resolve(), ext=ext))
+        except Exception as e:
+            warnings.warn(f'[OPTICAM] Could not open file {path.resolve()} due to the following exception: {e}')
     
     return file_paths

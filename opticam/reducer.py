@@ -52,7 +52,7 @@ class Reducer:
         background: BaseBackground | None = None,
         barycenter: bool = True,
         bias_corrector: BiasCorrector | None = None,
-        dark_corrector: DarkNoiseCorrector = DarkNoiseCorrector(),
+        dark_corrector: DarkNoiseCorrector | None = None,
         finder: None | Callable = None,
         flat_corrector: FlatFieldCorrector | None = None,
         instrument: Instrument = OPTICAM_MX(),
@@ -85,8 +85,7 @@ class Reducer:
             The bias corrector, by default `None`. If `None`, no bias corrections are performed. See 
             https://opticam.readthedocs.io/en/latest/_executed/applying_corrections.html for more details.
         dark_corrector : DarkNoiseCorrector, optional,
-            The dark noise corrector, by default `DarkNoiseCorrector()`. To perform dark current corrections using
-            dark images, a custom `DarkNoiseCorrector` instance must be passed. See
+            The dark noise corrector, by default `None`. If `None`, no dark noise corrections are performed. See
             https://opticam.readthedocs.io/en/latest/_executed/applying_corrections.html for more details.
         finder : Callable, optional
             The source finder, by default `None`. If `None`, the default source finder is used. If a callable is
@@ -184,7 +183,7 @@ class Reducer:
         self.bias_corrector = bias_corrector
         if self.bias_corrector is not None:
             errors = self.bias_corrector.run_checks(
-                data_files_by_filter=self.camera_files,
+                data_files_by_key=self.camera_files,
                 return_errors=True,
                 )
             if errors == 1:
@@ -195,7 +194,7 @@ class Reducer:
         self.dark_corrector = dark_corrector
         if self.dark_corrector is not None:
             errors = self.dark_corrector.run_checks(
-                data_files_by_filter=self.camera_files,
+                data_files_by_key=self.camera_files,
                 return_errors=True,
                 )
             if errors == 1:
@@ -206,7 +205,7 @@ class Reducer:
         self.flat_corrector = flat_corrector
         if self.flat_corrector is not None:
             errors = self.flat_corrector.run_checks(
-                data_files_by_filter=self.camera_files,
+                data_files_by_key=self.camera_files,
                 return_errors=True,
                 )
             if errors == 1:
@@ -287,23 +286,23 @@ class Reducer:
         
         ########################################### read catalogs ###########################################
         
-        for fltr in list(self.camera_files.keys()):
-            file_path = os.path.join(self.out_directory, f"cat/{fltr}_catalog.ecsv")
+        for key in list(self.camera_files.keys()):
+            file_path = os.path.join(self.out_directory, f"cat/{key}_catalog.ecsv")
             if os.path.isfile(file_path):
                 self.catalogs.update(
                     {
-                        fltr: QTable.read(
+                        key: QTable.read(
                             file_path,
                             format="ascii.ecsv",
                             )
                         }
                     )
-                self.psf_params[fltr] = set_psf_params(
+                self.psf_params[key] = set_psf_params(
                     aperture_selector=self.aperture_selector,
-                    catalog=self.catalogs[fltr],
+                    catalog=self.catalogs[key],
                     )
                 
-                self.logger.info(f"Read {fltr} catalog from file.")
+                self.logger.info(f"Read {key} catalog from file.")
         
         ########################################### read unaligned files ###########################################
         
@@ -329,7 +328,7 @@ class Reducer:
         # get parameters
         params = dict(recursive_log(self))
         
-        params.update({'filters': list(self.camera_files.keys())})
+        params.update({'keys': list(self.camera_files.keys())})
         
         # remove some parameters that are either already saved elsewhere or are not relevant
         params.pop('logger')
@@ -434,15 +433,15 @@ class Reducer:
         stacked_images = {}
         
         # for each camera
-        for fltr in self.camera_files.keys():
+        for key in self.camera_files.keys():
             
             # if no images found for camera, skip
-            if len(self.camera_files[fltr]) == 0:
+            if len(self.camera_files[key]) == 0:
                 continue
             
             # get reference image
             reference_image = get_data(
-                file=self.reference_files[fltr],
+                file=self.reference_files[key],
                 instrument=self.instrument,
                 bias_corrector=self.bias_corrector,
                 dark_corrector=self.dark_corrector,
@@ -461,17 +460,17 @@ class Reducer:
                     n_sources=n_alignment_sources,
                     )
             except Exception as e:
-                self.logger.error(f'No sources detected in {fltr} reference image ({self.reference_files[fltr]}): {e}. Reducing threshold or npixels in the source finder may help.')
+                self.logger.error(f'No sources detected in {key} reference image ({self.reference_files[key]}): {e}. Reducing threshold or npixels in the source finder may help.')
                 continue
             
             if len(reference_coords) < n_alignment_sources and transform_type == 'translation':
-                self.logger.error(f'Found {len(reference_coords)} sources in {fltr} reference image ({self.reference_files[fltr]}) but n_alignment_sources={n_alignment_sources}. transform_type="translation" requires at least n_alignment_sources be detected in the reference image to work. Consider reducing n_alignment_sources and/or threshold, or using transform_type="affine".')
+                self.logger.error(f'Found {len(reference_coords)} sources in {key} reference image ({self.reference_files[key]}) but n_alignment_sources={n_alignment_sources}. transform_type="translation" requires at least n_alignment_sources be detected in the reference image to work. Consider reducing n_alignment_sources and/or threshold, or using transform_type="affine".')
                 continue
             
-            self.logger.debug(f'{fltr} alignment source coordinates: {reference_coords}')
+            self.logger.debug(f'{key} alignment source coordinates: {reference_coords}')
             
             # align and stack images in batches
-            batches = get_batches(self.camera_files[fltr])
+            batches = get_batches(self.camera_files[key])
             results = process_map(
                 partial(
                     self._align_batch,
@@ -486,14 +485,14 @@ class Reducer:
                 batches,
                 max_workers=self.number_of_processors,
                 disable=not self.verbose,
-                desc=f'[OPTICAM] Aligning {fltr} images',
+                desc=f'[OPTICAM] Aligning {key} images',
                 bar_format=bar_format,
                 tqdm_class=tqdm,
                 )
             
             self.transforms, self.unaligned_files, stacked_image, background = parse_alignment_results(
                 results=results,
-                camera_files=self.camera_files[fltr],
+                camera_files=self.camera_files[key],
                 transforms=self.transforms,
                 unaligned_files=self.unaligned_files,
                 logger=self.logger,
@@ -512,32 +511,32 @@ class Reducer:
                     threshold,
                     )
             except Exception as e:
-                self.logger.error(f'No sources detected in the stacked {fltr} stacked image: {e}. Reducing threshold may help.')
+                self.logger.error(f'No sources detected in the stacked {key} stacked image: {e}. Reducing threshold may help.')
                 continue
             
             # save stacked image
-            stacked_images[fltr] = stacked_image
+            stacked_images[key] = stacked_image
             
             # limit catalog to brightest sources
             tbl = tbl[:max_catalog_sources]
             
             # save catalog
-            self.catalogs.update({fltr: tbl})  # type: ignore
-            self.catalogs[fltr].write(
-                os.path.join(self.out_directory, f"cat/{fltr}_catalog.ecsv"),
+            self.catalogs.update({key: tbl})  # type: ignore
+            self.catalogs[key].write(
+                os.path.join(self.out_directory, f"cat/{key}_catalog.ecsv"),
                 format="ascii.ecsv",
                 overwrite=True,
                 )
             
-            self.psf_params[fltr] = set_psf_params(
+            self.psf_params[key] = set_psf_params(
                 aperture_selector=self.aperture_selector,
-                catalog=self.catalogs[fltr],
+                catalog=self.catalogs[key],
                 )
             
             save_background(
                 out_directory=self.out_directory,
                 background=background,
-                fltr=fltr,
+                key=key,
                 bmjds=self.bmjds,
                 )
         
@@ -830,28 +829,28 @@ class Reducer:
         
         self.logger.info(f'Generating growth curves for targets: {repr(growth_curve_targets)}')
         
-        for fltr, cat in self.catalogs.items():
+        for key, cat in self.catalogs.items():
             
-            if fltr not in growth_curve_targets.keys():
-                self.logger.error(f'Filter {fltr} is not in target dictionary. Skipping.')
+            if key not in growth_curve_targets.keys():
+                self.logger.error(f'Key {key} is not in target dictionary. Skipping.')
                 continue
             
             fig = plot_growth_curves(
-                image=stacked_images[fltr],
+                image=stacked_images[key],
                 cat=cat,
-                targets=growth_curve_targets[fltr],
-                psf_params=self.psf_params[fltr],
+                targets=growth_curve_targets[key],
+                psf_params=self.psf_params[key],
                 read_noise=self.instrument.read_noise,
                 )
             
-            fig.suptitle(fltr, fontsize='large')
+            fig.suptitle(key, fontsize='large')
             
             dir_path = os.path.join(self.out_directory, 'diag/growth_curves')
             if not os.path.isdir(dir_path):
                 os.makedirs(dir_path, exist_ok=True)
             
             if save:
-                fig.savefig(os.path.join(dir_path, f'{fltr}_growth_curves.pdf'))
+                fig.savefig(os.path.join(dir_path, f'{key}_growth_curves.pdf'))
             
             if self.show_plots:
                 plt.show(fig)
@@ -874,22 +873,22 @@ class Reducer:
         # get stacked images
         stacked_images = get_stacked_images(self.out_directory)
         
-        for fltr in self.catalogs.keys():
+        for key in self.catalogs.keys():
             
-            a = self.psf_params[fltr]['semimajor_sigma']
-            b = self.psf_params[fltr]['semiminor_sigma']
+            a = self.psf_params[key]['semimajor_sigma']
+            b = self.psf_params[key]['semiminor_sigma']
             
             for source_indx in tqdm(
-                range(len(self.catalogs[fltr])),
+                range(len(self.catalogs[key])),
                 disable=not self.verbose,
-                desc=f'[OPTICAM] Plotting {fltr} PSFs',
+                desc=f'[OPTICAM] Plotting {key} PSFs',
                 bar_format=bar_format,
                 ):
                 plot_psf(
-                    catalog=self.catalogs[fltr],
+                    catalog=self.catalogs[key],
                     source_indx=source_indx,
-                    stacked_image=stacked_images[fltr],
-                    fltr=fltr,
+                    stacked_image=stacked_images[key],
+                    key=key,
                     a=a,
                     b=b,
                     out_directory=self.out_directory,
@@ -971,37 +970,37 @@ class Reducer:
         """
         
         # for each camera
-        for fltr in list(self.catalogs.keys()):
+        for key in list(self.catalogs.keys()):
             
             # skip cameras with no images
-            if len(self.camera_files[fltr]) == 0:
+            if len(self.camera_files[key]) == 0:
                 continue
-            elif os.path.exists(os.path.join(self.out_directory, f"cat/{fltr}_images.gif")) and not overwrite:
-                self.logger.info(f"[OPTICAM] {fltr} GIF already exists. To overwrite, set overwrite to True.")
+            elif os.path.exists(os.path.join(self.out_directory, f"cat/{key}_images.gif")) and not overwrite:
+                self.logger.info(f"{key} GIF already exists. To overwrite, set overwrite to True.")
                 continue
             
             # create gif frames directory if it does not exist
-            if not os.path.isdir(os.path.join(self.out_directory, f"diag/{fltr}_gif_frames")):
-                os.mkdir(os.path.join(self.out_directory, f"diag/{fltr}_gif_frames"))
+            if not os.path.isdir(os.path.join(self.out_directory, f"diag/{key}_gif_frames")):
+                os.mkdir(os.path.join(self.out_directory, f"diag/{key}_gif_frames"))
             
-            chunksize = get_batch_size(len(self.camera_files[fltr]))
+            chunksize = get_batch_size(len(self.camera_files[key]))
             process_map(
                 partial(
                     create_gif_frame,
                     out_directory=self.out_directory,
                     aperture_selector=self.aperture_selector,
-                    catalog=self.catalogs[fltr],
-                    fltr=fltr,
+                    catalog=self.catalogs[key],
+                    key=key,
                     transforms=self.transforms,
-                    reference_file=self.reference_files[fltr],
+                    reference_file=self.reference_files[key],
                     rebin_factor=self.rebin_factor,
                     background=self.background,
                     instrument=self.instrument,
                     ),
-                self.camera_files[fltr],
+                self.camera_files[key],
                 max_workers=self.number_of_processors,
                 disable=not self.verbose,
-                desc=f"[OPTICAM] Creating {fltr} GIF frames",
+                desc=f"[OPTICAM] Creating {key} GIF frames",
                 chunksize=chunksize,
                 bar_format=bar_format,
                 tqdm_class=tqdm,
@@ -1010,7 +1009,7 @@ class Reducer:
             # save GIF
             compile_gif(
                 out_directory=self.out_directory,
-                fltr=fltr,
+                key=key,
                 camera_files=self.camera_files,
                 keep_frames=keep_frames,
                 )
@@ -1053,12 +1052,12 @@ class Reducer:
         if targets is None:
             targets = create_targets_dict(self.catalogs)
         
-        for fltr in self.catalogs.keys():
-            if fltr not in targets.keys():
+        for key in self.catalogs.keys():
+            if key not in targets.keys():
                 continue
             
             img = get_data(
-                file=self.reference_files[fltr],
+                file=self.reference_files[key],
                 instrument=self.instrument,
                 bias_corrector=self.bias_corrector,
                 dark_corrector=self.dark_corrector,
@@ -1070,11 +1069,11 @@ class Reducer:
             plot_apertures(
                 out_directory=self.out_directory,
                 data=img,
-                cat=self.catalogs[fltr],
-                targets=targets[fltr],
+                cat=self.catalogs[key],
+                targets=targets[key],
                 photometer=photometer,
-                psf_params=self.psf_params[fltr],
-                fltr=fltr,
+                psf_params=self.psf_params[key],
+                key=key,
                 show=self.show_plots,
                 save=save,
             )
@@ -1107,28 +1106,28 @@ class Reducer:
             os.makedirs(save_dir)
         
         # for each filter
-        for fltr in self.catalogs.keys():
-            if os.path.isfile(os.path.join(save_dir, f'{fltr}_source_1.csv')) and not overwrite:
-                self.logger.info(f'[OPTICAM] Skipping {fltr} since existing light curves files were found. To overwrite these files, set overwrite=True.')
+        for key in self.catalogs.keys():
+            if os.path.isfile(os.path.join(save_dir, f'{key}_source_1.csv')) and not overwrite:
+                self.logger.info(f'Skipping {key} since existing light curves files were found. To overwrite these files, set overwrite=True.')
                 continue
             
-            source_coords = np.array([self.catalogs[fltr]["xcentroid"].value,  # type: ignore
-                                      self.catalogs[fltr]["ycentroid"].value],  # type:ignore
+            source_coords = np.array([self.catalogs[key]["xcentroid"].value,  # type: ignore
+                                      self.catalogs[key]["ycentroid"].value],  # type:ignore
                                      ).T
             
-            files = [file for file in self.camera_files[fltr] if file not in self.unaligned_files]
+            files = [file for file in self.camera_files[key] if file not in self.unaligned_files]
             batch_size = get_batch_size(len(files))
             results = process_map(
                 partial(
                     self._perform_photometry,
                     photometer=photometer,
                     source_coords=source_coords,
-                    fltr=fltr,
+                    key=key,
                 ),
                 files,
                 max_workers=self.number_of_processors,
                 disable=not self.verbose,
-                desc=f"[OPTICAM] Performing photometry on {fltr} images",
+                desc=f"[OPTICAM] Performing photometry on {key} images",
                 chunksize=batch_size,
                 bar_format=bar_format,
                 tqdm_class=tqdm,
@@ -1139,7 +1138,7 @@ class Reducer:
                 catalogs=self.catalogs,
                 barycenter=self.barycenter,
                 save_dir=save_dir,
-                fltr=fltr
+                key=key
             )
         
         plot_rms_vs_median_flux(
@@ -1155,7 +1154,7 @@ class Reducer:
         file: MEFSlice,
         photometer: BasePhotometer,
         source_coords: NDArray,
-        fltr: str,
+        key: str,
         ) -> dict[str, list]:
         """
         Perform photometry on a file.
@@ -1168,8 +1167,8 @@ class Reducer:
             The photometer to use.
         source_coords : NDArray
             The coordinates of the sources.
-        fltr : str
-            The image filter.
+        key : str
+            The camera:filter key.
         
         Returns
         -------
@@ -1212,7 +1211,7 @@ class Reducer:
             background_rms=background_rms,
             source_coords=source_coords,
             image_coords=image_coords,
-            psf_params=self.psf_params[fltr],
+            psf_params=self.psf_params[key],
             read_noise=self.instrument.read_noise,
             )
         
@@ -1280,10 +1279,10 @@ def log_dark_current(
     df = pd.merge(dark_curr_df, bmjds_df, on='file')
     df = df[['BMJD', 'dark_current', 'file']]  # change column order
     
-    for fltr, files in camera_files.items():
+    for key, files in camera_files.items():
         filter_df = df[df['file'].isin(files)]
         filter_df = filter_df.drop(columns='file')
-        filter_df.to_csv(os.path.join(out_directory, f'diag/{fltr}_dark_current.csv'), index=False)
+        filter_df.to_csv(os.path.join(out_directory, f'diag/{key}_dark_current.csv'), index=False)
 
 
 def set_psf_params(
@@ -1347,9 +1346,9 @@ def parse_alignment_results(
         values.
     """
     
-    fltr_transforms: dict[str, list[float]] = {}
-    fltr_unaligned_files: list[MEFSlice] = []
-    fltr_background: dict[str, dict[str, float]] = {}
+    key_transforms: dict[str, list[float]] = {}
+    key_unaligned_files: list[MEFSlice] = []
+    key_background: dict[str, dict[str, float]] = {}
     queued_logs: list[tuple[str, str]] = []
     
     # unpack results
@@ -1357,8 +1356,8 @@ def parse_alignment_results(
     
     # combine results
     for i in range(len(batch_stacked_images)):
-        fltr_transforms.update(batch_transforms[i])
-        fltr_background.update(batch_backgrounds[i])
+        key_transforms.update(batch_transforms[i])
+        key_background.update(batch_backgrounds[i])
         queued_logs += batch_queued_logs[i]
     
     # write log messages
@@ -1367,21 +1366,21 @@ def parse_alignment_results(
         logger=logger,
         )
     
-    aligned_files = list(fltr_transforms.keys())
+    aligned_files = list(key_transforms.keys())
     for file in camera_files:
         if file.key not in aligned_files:
-            fltr_unaligned_files.append(file)
+            key_unaligned_files.append(file)
     
     stacked_image = np.sum(batch_stacked_images, axis=0)  # stack images
     
-    transforms.update(fltr_transforms)  # update transforms to include current filter
-    unaligned_files += fltr_unaligned_files  # update unaligned files
+    transforms.update(key_transforms)  # update transforms to include current filter
+    unaligned_files += key_unaligned_files  # update unaligned files
     
     logger.info(f"[OPTICAM] Done.")
-    logger.info(f'[OPTICAM] {len(fltr_transforms)} image(s) aligned.')
-    logger.info(f'[OPTICAM] {len(fltr_unaligned_files)} image(s) could not be aligned.')
+    logger.info(f'[OPTICAM] {len(key_transforms)} image(s) aligned.')
+    logger.info(f'[OPTICAM] {len(key_unaligned_files)} image(s) could not be aligned.')
     
-    return transforms, unaligned_files, stacked_image, fltr_background
+    return transforms, unaligned_files, stacked_image, key_background
 
 
 def write_queued_logs(
@@ -1409,7 +1408,7 @@ def write_queued_logs(
 def save_background(
     out_directory: Path,
     background: dict[str, dict[str, float]],
-    fltr: str,
+    key: str,
     bmjds: dict[str, float],
     ) -> None:
     """
@@ -1421,8 +1420,8 @@ def save_background(
         The output directory.
     background : dict[Path, dict[str, float]]
         The background values for each file.
-    fltr : str
-        The corresponding filter.
+    key : str
+        The camera:filter key.
     bmjds : dict[Path, float]
         The BMJD values for each file {file path}.
     """
@@ -1437,7 +1436,7 @@ def save_background(
     merged_df = merged_df.drop('file', axis=1)  # delete file column
     merged_df = merged_df.reindex(columns=['BMJD', 'median', 'rms'])  # reorder columns
     
-    merged_df.to_csv(os.path.join(out_directory, f'diag/{fltr}_background.csv'), index=False)
+    merged_df.to_csv(os.path.join(out_directory, f'diag/{key}_background.csv'), index=False)
 
 
 def save_unaligned_files(
@@ -1516,10 +1515,10 @@ def create_targets_dict(
     
     targets: dict[str, list[int]] = {}
     
-    for fltr, cat in catalogs.items():
-        targets[fltr] = []
+    for key, cat in catalogs.items():
+        targets[key] = []
         for i in range(len(cat)):
-            targets[fltr].append(i + 1)
+            targets[key].append(i + 1)
     
     return targets
 
@@ -1529,7 +1528,7 @@ def save_photometry_results(
     catalogs: dict[str, QTable],
     barycenter: bool,
     save_dir: Path,
-    fltr: str,
+    key: str,
     ):
     """
     Save the photometry results to disk.
@@ -1542,8 +1541,8 @@ def save_photometry_results(
         The source catalogs.
     save_dir : Path
         The save directory path.
-    fltr : str
-        The photometry filter.
+    key : str
+        The camera:filter key.
     """
     
     photometry_results = parse_photometry_results(results)
@@ -1551,19 +1550,19 @@ def save_photometry_results(
     time_key = 'BMJD' if barycenter else 'MJD'
     
     # for each source in the catalog
-    for i in range(len(catalogs[fltr])):
+    for i in range(len(catalogs[key])):
         
         # unpack results for ith source
         source_results = {}
-        for key, values in photometry_results.items():
+        for phot_key, phot_values in photometry_results.items():
             
             # time is a special case since it is already a single column
-            if key == time_key:
-                source_results[key] = np.asarray(values)
+            if phot_key == time_key:
+                source_results[phot_key] = np.asarray(phot_values)
             # for other keys, the ith column needs to be extracted
             else:
-                col = [value[i] for value in values]
-                source_results[key] = np.asarray(col)
+                col = [phot_value[i] for phot_value in phot_values]
+                source_results[phot_key] = np.asarray(col)
         
         # define light curve as a DataFrame
         df = pd.DataFrame(source_results)
@@ -1579,10 +1578,11 @@ def save_photometry_results(
         df.to_csv(
             os.path.join(
                 save_dir,
-                f'{fltr}_source_{i + 1}.csv',
+                f'{key}_source_{i + 1}.csv',
                 ),
             index=False,
             )
+
 
 def parse_photometry_results(
     results: tuple[dict[str, list]],

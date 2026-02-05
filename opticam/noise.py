@@ -13,6 +13,7 @@ from opticam.photometers import AperturePhotometer
 from opticam.utils.constants import counts_to_mag_factor
 from opticam.mef_slice import MEFSlice
 from opticam.utils.fits_handlers import get_data
+from opticam.utils.helpers import camera_and_filter_key
 
 
 
@@ -263,7 +264,7 @@ def get_noise_params(
     psf_params: dict[str, float],
     instrument: Instrument,
     bias_corrector: BiasCorrector | None,
-    dark_corrector: DarkNoiseCorrector,
+    dark_corrector: DarkNoiseCorrector | None,
     flat_corrector: FlatFieldCorrector | None,
     ) -> tuple[NDArray[np.int64], NDArray[np.float64], NDArray[np.float64], float, float, float, float, float]:
     """
@@ -283,7 +284,7 @@ def get_noise_params(
         The instrument.
     bias_corrector : BiasCorrector | None
         The bias corrector.
-    dark_corrector : DarkNoiseCorrector
+    dark_corrector : DarkNoiseCorrector | None
         The dark noise corrector.
     flat_corrector : FlatFieldCorrector | None
         The flat-field corrector.
@@ -296,7 +297,9 @@ def get_noise_params(
     """
     
     header = file.get_header()
+    camera = instrument.get_camera(header=header)
     fltr = instrument.get_filter(header=header)
+    key = camera_and_filter_key(camera=camera, fltr=fltr)
     
     coords = np.asarray([catalog['xcentroid'], catalog['ycentroid']]).T
     
@@ -312,19 +315,22 @@ def get_noise_params(
     
     # get median bias variance
     if bias_corrector is not None:
-        bias_var = bias_corrector.master_variances[fltr]
+        bias_var = bias_corrector.master_variances[camera]
     else:
         bias_var = 0.
     
     # get median dark variance
-    if fltr in dark_corrector.master_images.keys():
-        dark_var = dark_corrector.master_variances[fltr]
+    if dark_corrector is not None:
+        if camera in dark_corrector.master_images.keys():
+            dark_var = dark_corrector.master_variances[camera]
+        else:
+            dark_var = instrument.get_dark_flux(header=header)
     else:
-        dark_var = instrument.get_dark_flux(header=header)
+        dark_var = 0.
     
     # get median flat-field variance
     if flat_corrector is not None:
-        flat_var = flat_corrector.master_variances[fltr]
+        flat_var = flat_corrector.master_variances[key]
     else:
         flat_var = 0.
     
@@ -369,7 +375,7 @@ def get_snrs(
     psf_params: dict[str, float],
     instrument: Instrument,
     bias_corrector: BiasCorrector | None,
-    dark_corrector: DarkNoiseCorrector,
+    dark_corrector: DarkNoiseCorrector | None,
     flat_corrector: FlatFieldCorrector | None,
     ) -> tuple[NDArray, NDArray]:
     """
@@ -389,7 +395,7 @@ def get_snrs(
         The instrument.
     bias_corrector : BiasCorrector | None
         The bias corrector.
-    dark_corrector : DarkNoiseCorrector
+    dark_corrector : DarkNoiseCorrector | None
         The dark noise corrector.
     flat_corrector : FlatFieldCorrector | None
         The flat-field corrector.

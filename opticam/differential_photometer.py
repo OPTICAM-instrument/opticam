@@ -62,29 +62,29 @@ class DifferentialPhotometer:
         with open(self.out_directory.joinpath('misc/reduction_parameters.json'), 'r') as file:
             input_parameters = json.load(file)
         
-        self.filters = input_parameters['filters']
+        self.keys = input_parameters['keys']
         self.time_key = 'BMJD' if input_parameters['barycenter'] else 'MJD'
         self.time_scale = 'tdb' if input_parameters['barycenter'] else 'utc'
         self.t_ref = Time(input_parameters['t_ref'], format='mjd', scale=self.time_scale)
         
         # output filters
-        print('[OPTICAM] Filters: ' + ', '.join(list(self.filters)))
+        print('[OPTICAM] Keys: ' + ', '.join(list(self.keys)))
         
         ########################################### read catalogs ###########################################
         
         self.catalogs = {}
-        for fltr in self.filters:
+        for key in self.keys:
             try:
                 self.catalogs.update(
                     {
-                        fltr: QTable.read(
-                            self.out_directory.joinpath(f'cat/{fltr}_catalog.ecsv'),
+                        key: QTable.read(
+                            self.out_directory.joinpath(f'cat/{key}_catalog.ecsv'),
                             format='ascii.ecsv'),
                         },
                     )
             except:
-                print(f'[OPTICAM] Could not load {self.out_directory.joinpath(f'cat/{fltr}_catalog.ecsv')}, skipping.')
-                self.filters.remove(fltr)
+                print(f'[OPTICAM] Could not load {self.out_directory.joinpath(f'cat/{key}_catalog.ecsv')}, skipping.')
+                self.keys.remove(key)
                 continue
         
         ########################################### plot catalogs ###########################################
@@ -105,7 +105,7 @@ class DifferentialPhotometer:
 
     def get_relative_light_curve(
         self,
-        fltr: str,
+        key: str,
         target: int,
         comparisons: int | List[int],
         phot_label: str,
@@ -122,8 +122,8 @@ class DifferentialPhotometer:
         
         Parameters
         ----------
-        fltr : str
-            The filter to compute the relative light curve for.
+        key : str
+            The camera:filter key for which the relative light curve will be computed.
         target : int
             The catalog ID of the target source.
         comparisons : int | List[int]
@@ -148,8 +148,8 @@ class DifferentialPhotometer:
             self.out_directory.joinpath('relative_light_curves').mkdir(parents=True)
         
         # validate filter
-        if fltr not in self.filters:
-            raise ValueError(f'[OPTICAM] {fltr} is not a valid filter.')
+        if key not in self.keys:
+            raise ValueError(f'[OPTICAM] {key} is not a valid key.')
         
         # if a single comparison source is given, convert to list
         if isinstance(comparisons, int):
@@ -160,18 +160,18 @@ class DifferentialPhotometer:
         if not match_other_cameras:
             # compute relative light curve for single filter
             new_lc = self._compute_relative_light_curve(
-                fltr=fltr,
+                key=key,
                 target=target,
                 comparisons=comparisons,
                 prefix=prefix,
                 phot_label=phot_label,
                 show_diagnostics=show_diagnostics,
                 )
-            matched_filters = [fltr]
+            matched_filters = [key]
         else:
             # compute relative light curves for all available filters
             new_lc, matched_filters = self._match_other_cameras(
-                input_fltr=fltr,
+                input_key=key,
                 input_target=target,
                 input_comparisons=comparisons,
                 prefix=prefix,
@@ -201,7 +201,7 @@ class DifferentialPhotometer:
 
     def _compute_relative_light_curve(
         self,
-        fltr: str,
+        key: str,
         target: int,
         comparisons: List[int],
         prefix: str | None,
@@ -214,8 +214,8 @@ class DifferentialPhotometer:
         
         Parameters
         ----------
-        fltr : str
-            The filter to compute the relative light curve for.
+        key : str
+            The camera:filter key.
         target : int
             The catalog ID of the target source.
         comparisons : List[int]
@@ -237,11 +237,11 @@ class DifferentialPhotometer:
         # subdirectory where results will be saved
         light_curve_dir = f'lcs/{phot_label}'
         
-        target_df = pd.read_csv(self.out_directory.joinpath(f'{light_curve_dir}/{fltr}_source_{target}.csv'))
+        target_df = pd.read_csv(self.out_directory.joinpath(f'{light_curve_dir}/{key}_source_{target}.csv'))
         
         comp_dfs = []
         for comp in comparisons:
-            path = self.out_directory.joinpath(f'{light_curve_dir}/{fltr}_source_{comp}.csv')
+            path = self.out_directory.joinpath(f'{light_curve_dir}/{key}_source_{comp}.csv')
             try:
                 comparison_df = pd.read_csv(path)
             except:
@@ -258,7 +258,7 @@ class DifferentialPhotometer:
         
         # diagnostic plots
         self._plot_diags(
-            fltr=fltr,
+            key=key,
             target=target,
             comparisons=comparisons,
             target_df=filtered_target_df,
@@ -277,23 +277,23 @@ class DifferentialPhotometer:
         # save relative light curve to CSV
         DataFrame({
             self.time_key: time,
-            f'{fltr}_rel_flux': relative_flux,
-            f'{fltr}_rel_flux_err': relative_flux_error,
+            f'{key}_rel_flux': relative_flux,
+            f'{key}_rel_flux_err': relative_flux_error,
         }).to_csv(
-            self.out_directory.joinpath(f'relative_light_curves/{phot_label}/{prefix}_{fltr}_light_curve.csv'),
+            self.out_directory.joinpath(f'relative_light_curves/{phot_label}/{prefix}_{key}_light_curve.csv'),
             index=False,
         )
         
         ts = TimeSeries(time=Time(time, format='mjd', scale=self.time_scale))
-        ts[f'{fltr}_rel_flux'] = relative_flux
-        ts[f'{fltr}_rel_flux_err'] = relative_flux_error
+        ts[f'{key}_rel_flux'] = relative_flux
+        ts[f'{key}_rel_flux_err'] = relative_flux_error
         
         return ts
 
 
     def _match_other_cameras(
         self,
-        input_fltr: str,
+        input_key: str,
         input_target: int,
         input_comparisons: List[int],
         prefix: str | None,
@@ -305,7 +305,7 @@ class DifferentialPhotometer:
         
         Parameters
         ----------
-        input_fltr : str
+        input_key : str
             The input filter.
         input_target : int
             The target ID in the input filter's catalog.
@@ -325,11 +325,11 @@ class DifferentialPhotometer:
         """
         
         new_lcs = TimeSeries()
-        matched_filters = [input_fltr]
+        matched_filters = [input_key]
         
         # catalog of input filter
         input_cat = QTable.read(
-            self.out_directory.joinpath(f"cat/{input_fltr}_catalog.ecsv"),
+            self.out_directory.joinpath(f"cat/{input_key}_catalog.ecsv"),
             format="ascii.ecsv",
             )
         
@@ -338,11 +338,11 @@ class DifferentialPhotometer:
         ref_target_coords = ref_coords[input_target - 1]  # subtract 1 to account for zero-indexing
         ref_comparison_coords = [ref_coords[comp - 1] for comp in input_comparisons]
         
-        for fltr in self.filters:
-            if fltr == input_fltr:
+        for key in self.keys:
+            if key == input_key:
                 # no matching necessary
                 new_lc = self._compute_relative_light_curve(
-                    input_fltr,
+                    input_key,
                     input_target,
                     input_comparisons,
                     prefix,
@@ -357,19 +357,19 @@ class DifferentialPhotometer:
                         ref_coords,
                         ref_target_coords,
                         ref_comparison_coords,
-                        fltr,
+                        key,
                         )
                     
-                    print(f'[OPTICAM] {input_fltr} target ID {input_target} was matched to {fltr} target ID {matched_target}')
+                    print(f'[OPTICAM] {input_key} target ID {input_target} was matched to {key} target ID {matched_target}')
                     for i in range(len(input_comparisons)):
-                        print(f'[OPTICAM] {fltr} comparison ID {input_comparisons[i]} was matched to {fltr} comparison ID {matched_comparisons[i]}')
-                    matched_filters.append(fltr)
+                        print(f'[OPTICAM] {key} comparison ID {input_comparisons[i]} was matched to {key} comparison ID {matched_comparisons[i]}')
+                    matched_filters.append(key)
                 except:
-                    print(f'[OPTICAM] Could not match {fltr} sources to {input_fltr} sources. This can happen if many stars are not identified across all catalogs. Sometimes simply trying again can help (RNG is involved), but often increasing max_catalog_sources in Catalog.create_catalogs() will more reliably solve the issue.')
+                    print(f'[OPTICAM] Could not match {key} sources to {input_key} sources. This can happen if many stars are not identified across all catalogs. Sometimes simply trying again can help (RNG is involved), but often increasing max_catalog_sources in Catalog.create_catalogs() will more reliably solve the issue.')
                     continue
                 
                 new_lc = self._compute_relative_light_curve(
-                    fltr=fltr,
+                    key=key,
                     target=matched_target,
                     comparisons=matched_comparisons,
                     prefix=prefix,
@@ -384,7 +384,7 @@ class DifferentialPhotometer:
 
     def _plot_diags(
         self,
-        fltr: str,
+        key: str,
         target: int,
         comparisons: List[int],
         target_df: DataFrame,
@@ -397,7 +397,7 @@ class DifferentialPhotometer:
         
         Parameters
         ----------
-        fltr : str
+        key : str
             The image filter.
         target : int
             The target ID.
@@ -416,7 +416,7 @@ class DifferentialPhotometer:
         for i, df in enumerate(comp_dfs):
             # diagnostics between target and all comparison sources
             self._plot_diag(
-                fltr=fltr,
+                key=key,
                 comparison1=target,
                 comparison2=comparisons[i],
                 comparison1_df=target_df,
@@ -428,7 +428,7 @@ class DifferentialPhotometer:
                 if i != j:
                     # diagnostics between each pair of comparison sources
                     self._plot_diag(
-                        fltr=fltr,
+                        key=key,
                         comparison1=comparisons[i],
                         comparison2=comparisons[j],
                         comparison1_df=df,
@@ -440,7 +440,7 @@ class DifferentialPhotometer:
 
     def _plot_diag(
         self,
-        fltr: str,
+        key: str,
         comparison1: int,
         comparison2: int,
         comparison1_df: DataFrame,
@@ -453,7 +453,7 @@ class DifferentialPhotometer:
         
         Parameters
         ----------
-        fltr : str
+        key : str
             The filter to compute the relative light curve.
         comparison1 : int
             The catalog ID of the first comparison source.
@@ -490,7 +490,7 @@ class DifferentialPhotometer:
         
         ########################################### normalised light curves ###########################################
         
-        axes[0].set_title(f'{fltr} Target ID: {comparison1}, Comparison ID: {comparison2}')
+        axes[0].set_title(f'{key} Target ID: {comparison1}, Comparison ID: {comparison2}')
         axes[0].errorbar(
             time,
             comparison1_df['flux'] / comparison1_df['flux'].median(),
@@ -545,7 +545,7 @@ class DifferentialPhotometer:
         if not save_dir.is_dir():
             save_dir.mkdir(parents=True)
         
-        fig.savefig(save_dir.joinpath(f'{fltr}_{comparison1}_{comparison2}_diag_light_curve.png'))
+        fig.savefig(save_dir.joinpath(f'{key}_{comparison1}_{comparison2}_diag_light_curve.png'))
         
         ########################################### optionally show plot ###########################################
         
@@ -644,7 +644,7 @@ def transform_IDs(
     ref_coords: NDArray,
     ref_target_coords: NDArray,
     ref_comparison_coords: List[NDArray],
-    fltr: str,
+    key: str,
     ) -> Tuple[int, List[int]]:
     """
     Transform some source IDs from one camera to another.
@@ -659,7 +659,7 @@ def transform_IDs(
         The coordinates of the sources being transformed in the current (reference) catalogue.
     ref_comparison_coords : List[NDArray]
         The coordiantes of all sources in the new (comparison) catalogue.
-    fltr : str
+    key : str
         The current filter.
     
     Returns
@@ -670,7 +670,7 @@ def transform_IDs(
     
     # get source positions in new filter
     cat = QTable.read(
-        out_directory.joinpath(f"cat/{fltr}_catalog.ecsv"),
+        out_directory.joinpath(f"cat/{key}_catalog.ecsv"),
         format="ascii.ecsv",
         )
     coords = np.asarray([cat["xcentroid"].value, cat["ycentroid"].value]).T

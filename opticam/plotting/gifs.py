@@ -26,7 +26,7 @@ def create_gif_frame(
     out_directory: Path,
     aperture_selector: Callable,
     catalog: QTable,
-    fltr: str,
+    key: str,
     instrument: Instrument,
     transforms: Dict[str, List[float]],
     reference_file: MEFSlice,
@@ -46,8 +46,8 @@ def create_gif_frame(
         The aperture selector function.
     catalog : QTable
         The catalogue.
-    fltr : str
-        The filter.
+    key : str
+        The camera:filter key.
     instrument : Instrument
         The instrument that produced the image.
     transforms : Dict[str, List[float]]
@@ -76,7 +76,7 @@ def create_gif_frame(
     # clip negative values for better visualisation
     plot_image = np.clip(clean_data, 0, None)
     
-    fig, ax = plt.subplots(num=1, clear=True, tight_layout=True)
+    fig, ax = plt.subplots(clear=True, tight_layout=True)
     
     ax.imshow(
         plot_image,
@@ -121,12 +121,15 @@ def create_gif_frame(
         ax.set_xlabel('X', fontsize='large')
         ax.set_ylabel('Y', fontsize='large')
     
-    fig.savefig(os.path.join(out_directory, f'diag/{fltr}_gif_frames/{file_name.split('.')[0]}.png'), bbox_inches='tight')
+    fig.savefig(os.path.join(out_directory, f'diag/{key}_gif_frames/{file_name.split('.')[0]}.png'), bbox_inches='tight')
+    
+    fig.clear()
+    plt.close(fig)
 
 
 def compile_gif(
     out_directory: Path,
-    fltr: str,
+    key: str,
     camera_files: Dict[str, List[MEFSlice]],
     keep_frames: bool,
     ) -> None:
@@ -137,8 +140,8 @@ def compile_gif(
     ----------
     out_directory : Path
         The output directory.
-    fltr : str
-        The filter.
+    key : str
+        The camera:filter key.
     camera_files : Dict[str, List[MEFSlice]]
         The image files grouped by filter.
     keep_frames : bool
@@ -147,9 +150,9 @@ def compile_gif(
     
     # load frames
     frames = []
-    for file in camera_files[fltr]:
+    for file in camera_files[key]:
         try:
-            frames.append(Image.open(os.path.join(out_directory, f'diag/{fltr}_gif_frames/{file.path.name.split(".")[0]}.png')))
+            frames.append(Image.open(os.path.join(out_directory, f'diag/{key}_gif_frames/{file.path.name.split(".")[0]}.png')))
         except:
             pass
     
@@ -157,7 +160,7 @@ def compile_gif(
     frames[0].save(
         os.path.join(
             out_directory,
-            f'cat/{fltr}_images.gif',
+            f'cat/{key}_images.gif',
             ),
         format='GIF',
         append_images=frames[1:],
@@ -173,5 +176,5 @@ def compile_gif(
     
     if not keep_frames:
         # delete frames after gif is saved
-        for file in os.listdir(os.path.join(out_directory, f"diag/{fltr}_gif_frames")):
-            os.remove(os.path.join(out_directory, f"diag/{fltr}_gif_frames/{file}"))
+        for file in os.listdir(os.path.join(out_directory, f"diag/{key}_gif_frames")):
+            os.remove(os.path.join(out_directory, f"diag/{key}_gif_frames/{file}"))

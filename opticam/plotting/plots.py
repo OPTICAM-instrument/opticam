@@ -476,7 +476,7 @@ def plot_psf(
     catalog: QTable,
     source_indx: int,
     stacked_image: NDArray,
-    fltr: str,
+    key: str,
     a: float,
     b: float,
     out_directory: Path,
@@ -492,8 +492,8 @@ def plot_psf(
         The index of the source in the catalog.
     stacked_image : NDArray
         The catalog image.
-    fltr : str
-        The filter.
+    key : str
+        The camera:filter key.
     a : float
         The semimajor standard deviation of the PSF.
     b : float
@@ -615,11 +615,11 @@ def plot_psf(
             top=True,
             )
     
-    fig.suptitle(f'{fltr} Source {source_indx + 1}', fontsize='large')
+    fig.suptitle(f'{key} Source {source_indx + 1}', fontsize='large')
     fig.savefig(
         os.path.join(
             out_directory,
-            f'psfs/{fltr}_source_{source_indx + 1}.pdf',
+            f'psfs/{key}_source_{source_indx + 1}.pdf',
             ),
         )
     plt.close(fig)
@@ -837,7 +837,7 @@ def plot_snrs(
     catalogs: dict[str, QTable],
     instrument: Instrument,
     bias_corrector: BiasCorrector | None,
-    dark_corrector: DarkNoiseCorrector,
+    dark_corrector: DarkNoiseCorrector | None,
     flat_corrector: FlatFieldCorrector | None,
     show: bool,
     save: bool,
@@ -861,7 +861,7 @@ def plot_snrs(
         The instrument that produced the data.
     bias_corrector : BiasCorrector | None
         The bias corrector.
-    dark_corrector : DarkNoiseCorrector
+    dark_corrector : DarkNoiseCorrector | None
         The dark noise corrector.
     flat_corrector : FlatFieldCorrector | None
         The flat-field corrector.
@@ -1018,13 +1018,13 @@ def plot_noise(
         axes[0][i].plot(results['model_mags'], results['effective_noise'], label='Effective noise', c='k', lw=1, zorder=3)
         
         axes[0][i].plot(results['model_mags'], results['sky_noise'], ls=(5, (10, 3)), lw=1, label='Sky noise')
-        
         axes[0][i].plot(results['model_mags'], results['shot_noise'], ls=(0, (5, 5)), lw=1, label='Shot noise')
         
         if np.any(results['bias'] > 0):
             axes[0][i].plot(results['model_mags'], results['bias'], ls=(0, (5, 1)), lw=1, label='Bias')
         
-        axes[0][i].plot(results['model_mags'], results['dark_noise'], ls=(0, (3, 5, 1, 5)), lw=1, label='Dark noise')
+        if np.any(results['dark_noise'] > 0):
+            axes[0][i].plot(results['model_mags'], results['dark_noise'], ls=(0, (3, 5, 1, 5)), lw=1, label='Dark noise')
         
         if np.any(results['flat'] > 0):
             axes[0][i].plot(results['model_mags'], results['flat'], ls=(0, (3, 1, 1, 1)), lw=1, label='Flat')
@@ -1129,7 +1129,7 @@ def plot_apertures(
     targets: list[int] | int,
     photometer: AperturePhotometer,
     psf_params: dict[str, float],
-    fltr: str,
+    key: str,
     show: bool,
     save: bool,
     ):
@@ -1150,8 +1150,8 @@ def plot_apertures(
         The `AperturePhotometer` instance.
     psf_params : dict[str, float]
         The PSF parameters.
-    fltr : str
-        The image filter.
+    key : str
+        The camera:filter key.
     show : bool
         Whether to show the plot.
     save : bool
@@ -1298,13 +1298,13 @@ def plot_apertures(
         axes[i].set_ylabel('Y', fontsize='large')
         axes[i].set_title(f'Source {target}', fontsize='large')
     
-    fig.suptitle(fltr)
+    fig.suptitle(key)
     
     if save:
         save_path = os.path.join(out_directory, 'diag/apertures')
         if not os.path.isdir(save_path):
             os.makedirs(save_path)
-        fig.savefig(os.path.join(save_path, f'{fltr}_apertures.pdf'))
+        fig.savefig(os.path.join(save_path, f'{key}_apertures.pdf'))
     
     if show:
         plt.show(fig)

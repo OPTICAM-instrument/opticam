@@ -173,6 +173,19 @@ def get_lc(
     return lc
 
 
+def camera_and_filter_key(
+    camera: str,
+    fltr: str,
+    ) -> str:
+    
+    return camera + ':' + fltr
+
+
+def camera_key(
+    key: str,
+    ) -> str:
+    
+    return key.split(':')[0]
 
 
 
