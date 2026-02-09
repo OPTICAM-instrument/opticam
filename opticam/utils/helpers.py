@@ -51,11 +51,12 @@ def sort_dict_by_filters(
     """
     
     for key in d.keys():
-        if key not in filter_order.keys():
+        fltr = filter_key(key)
+        if fltr not in filter_order.keys():
             # unrecognised filter; cannot sort
             return d
     
-    return dict(sorted(d.items(), key=lambda x: filter_order[x[0]]))
+    return dict(sorted(d.items(), key=lambda x: filter_order[filter_key(x[0])]))
 
 
 def sort_filters(
@@ -81,7 +82,7 @@ def sort_filters(
             # unrecognised filter; cannot sort
             return filters
     
-    return sorted(filters, key=lambda x: filter_order[x[0]])
+    return sorted(filters, key=lambda x: filter_order[x.split(':')[-1]])
 
 
 def propagate_errors(
@@ -128,17 +129,17 @@ def propagate_errors(
 
 def get_lc(
     light_curves: TimeSeries,
-    fltr: str,
+    key: str,
     ) -> TimeSeries:
     """
-    Given a table of light curves, extract the light curve for a single filter.
+    Given a table of light curves, extract the light curve for a single key.
     
     Parameters
     ----------
     light_curves : TimeSeries
         The table of light curves.
-    fltr : str
-        The filter.
+    key : str
+        The camera:filter key (e.g., "1:g" for camera 1 with a g filter).
     
     Returns
     -------
@@ -152,11 +153,11 @@ def get_lc(
     for colname in colnames:
         # get filter fluxes
         if 'rel_flux' in colname:
-            if f'{fltr}_rel_flux' in colname:
+            if f'{key}_rel_flux' in colname:
                 new_colnames.append(colname)
         # get filter backgrounds if included
         elif 'bkg' in colname:
-            if f'{fltr}_bkg' in colname:
+            if f'{key}_bkg' in colname:
                 new_colnames.append(colname)
         # include all non-flux/non-background columns (time, time_bin_start, etc.)
         else:
@@ -165,18 +166,35 @@ def get_lc(
     lc = light_curves[*new_colnames]
     
     # remove NaN rows
-    f = np.asarray(lc[f'{fltr}_rel_flux'].value)
-    ferr = np.asarray(lc[f'{fltr}_rel_flux_err'].value)
+    f = np.asarray(lc[f'{key}_rel_flux'].value)
+    ferr = np.asarray(lc[f'{key}_rel_flux_err'].value)
     mask = np.where(np.isnan(f) | np.isnan(ferr))[0]
     lc.remove_rows(mask)
     
-    return lc
+    return TimeSeries(lc)
 
 
 def camera_and_filter_key(
     camera: str,
     fltr: str,
     ) -> str:
+    """
+    Create a unique camera:filter key. This unique key breaks degeneracies in multi-camera, multi-filter instruments,
+    such that flat-field corrections can be applied properly.
+    
+    Parameters
+    ----------
+    camera : str
+        The camera. For single-camera instruments, this can simply be the name of the instrument. For multi-camera
+        instruments, however, this value should be unambiguous (e.g., the individual camera name or number).
+    fltr : str
+        The filter.
+    
+    Returns
+    -------
+    str
+        The unique camera:filter key.
+    """
     
     return camera + ':' + fltr
 
@@ -184,8 +202,41 @@ def camera_and_filter_key(
 def camera_key(
     key: str,
     ) -> str:
+    """
+    Given a unique camera:filter key, get the camera. This is used to apply bias and dark noise corrections, which are
+    indifferent to the filter used.
+    
+    Parameters
+    ----------
+    key : str
+        The unique camera:filter key.
+    
+    Returns
+    -------
+    str
+        The camera.
+    """
     
     return key.split(':')[0]
 
+
+def filter_key(
+    key: str,
+    ) -> str:
+    """
+    Given a unique camera:filter key, get the filter.
+    
+    Parameters
+    ----------
+    key : str
+        The unique camera:filter key.
+    
+    Returns
+    -------
+    str
+        The filter.
+    """
+    
+    return key.split(':')[-1]
 
 
