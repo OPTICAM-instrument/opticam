@@ -378,7 +378,6 @@ def plot_growth_curves(
     cat: QTable,
     targets: int | list[int],
     psf_params: dict,
-    read_noise: float,
     ) -> Figure:
     """
     Plot the growth curves given a (stacked) image and corresponding source catalog.
@@ -393,8 +392,6 @@ def plot_growth_curves(
         The target(s) for which growth curves are to be computed.
     psf_params : dict
         The PSF parameters.
-    read_noise : float
-        The instrument's readout noise.
     
     Returns
     -------
@@ -442,7 +439,6 @@ def plot_growth_curves(
             x_centroid=cat['xcentroid'][i],
             y_centroid=cat['ycentroid'][i],
             r_max = round(10 * psf_params['semimajor_sigma']),
-            read_noise=read_noise,
         )
         
         axes[i].step(
@@ -1379,7 +1375,7 @@ def get_max_region_size(
 
 
 def plot_light_curves(
-    filters: list[str],
+    keys: list[str],
     light_curves: TimeSeries,
     t_ref: Quantity | None,
     y_label: Any = None,
@@ -1389,8 +1385,8 @@ def plot_light_curves(
     
     Parameters
     ----------
-    filters : list[str]
-        The light curve filters.
+    keys : list[str]
+        The light curve camera:filter keys.
     light_curves : TimeSeries
         The light curves.
     t_ref : Quantity
@@ -1404,7 +1400,7 @@ def plot_light_curves(
         The resulting figure.
     """
     
-    nrows: int = len(filters)
+    nrows: int = len(keys)
     
     fig, axes = plt.subplots(
         nrows=nrows,
@@ -1422,13 +1418,13 @@ def plot_light_curves(
     if t_ref is None:
         t_ref = light_curves.time.min()
     
-    for i, fltr in enumerate(filters):
+    for i, key in enumerate(keys):
         
-        lc = get_lc(light_curves, fltr)
+        lc = get_lc(light_curves, key=key)
         
         time = (lc['time'] - t_ref).to_value(u.s)
-        flux = lc[f'{fltr}_rel_flux'].value
-        flux_err = lc[f'{fltr}_rel_flux_err'].value
+        flux = lc[f'{key}_rel_flux'].value
+        flux_err = lc[f'{key}_rel_flux_err'].value
         
         axes[i].errorbar(
             time,
@@ -1453,7 +1449,7 @@ def plot_light_curves(
                 [],
                 marker='none',
                 linestyle='none',
-                label=fltr,
+                label=key,
             )
         
         axes[i].legend(

@@ -61,16 +61,16 @@ class Analyzer:
         if light_curves:
             lc_cols = light_curves.colnames
             filter_cols: List[str] = [col for col in lc_cols if '_rel_flux_err' in col]
-            filters = [col.replace('_rel_flux_err', '') for col in filter_cols]
-            self.filters = sort_filters(list(set(filters)))
+            keys = [col.replace('_rel_flux_err', '') for col in filter_cols]
+            self.keys = sort_filters(list(set(keys)))
         else:
-            self.filters = []
+            self.keys = []
         
         self.norm = norm
         self.light_curves = validate_light_curves(
             light_curves,
             norm=self.norm,
-            filters=self.filters,
+            keys=self.keys,
             )
         self.t_ref = self.light_curves['time'].min()
         
@@ -158,6 +158,27 @@ class Analyzer:
             )
 
 
+    def get_lc(
+        self,
+        key: str,
+        ) -> TimeSeries:
+        """
+        Return the light curve for a single key.
+        
+        Parameters
+        ----------
+        key : str
+            The camera:filter key (e.g., "1:g" for camera 1 with a g filter).
+        
+        Returns
+        -------
+        TimeSeries
+            The light curve for the key.
+        """
+        
+        return get_lc(light_curves=self.light_curves, key=key)
+
+
     def plot(
         self,
         save: bool = True,
@@ -181,7 +202,7 @@ class Analyzer:
         """
         
         fig = plot_light_curves(
-            filters=self.filters,
+            keys=self.keys,
             light_curves=self.light_curves,
             t_ref=self.t_ref,
             y_label='Normalized flux',
@@ -232,7 +253,7 @@ class Analyzer:
             Lomb-Scargle periodograms are returned.
         """
         
-        nrows: int = len(self.filters)
+        nrows: int = len(self.keys)
         
         fig, axes = plt.subplots(
             nrows=nrows,
@@ -249,27 +270,27 @@ class Analyzer:
         
         lsps: Dict[str, LombScargle] = {}
         
-        for i, fltr in enumerate(self.filters):
+        for i, key in enumerate(self.keys):
             
-            lc = get_lc(self.light_curves, fltr)
+            lc = get_lc(self.light_curves, key=key)
             
             t = lc.time
             dt = np.min(np.diff(t))
             
-            lsps[fltr] = LombScargle.from_timeseries(
+            lsps[key] = LombScargle.from_timeseries(
                 lc,
-                signal_column_name=f'{fltr}_rel_flux',
-                uncertainty=f'{fltr}_rel_flux_err',
+                signal_column_name=f'{key}_rel_flux',
+                uncertainty=f'{key}_rel_flux_err',
                 )
             
             if frequency is None:
-                f = lsps[fltr].autofrequency(
+                f = lsps[key].autofrequency(
                     maximum_frequency=.5 / dt,  # (pseudo-)Nyquist frequency
                     )
             else:
                 f = frequency
             
-            power = lsps[fltr].power(f)
+            power = lsps[key].power(f)
             
             axes[i].step(
                 f.to_value(u.Hz),
@@ -283,7 +304,7 @@ class Analyzer:
                 [],
                 marker='none',
                 linestyle='none',
-                label=fltr,
+                label=key,
             )
             
             axes[i].legend(
@@ -350,8 +371,8 @@ class Analyzer:
         # set maximum and minimum frequencies
         minimum_frequency = np.inf
         maximum_frequency = 0
-        for fltr in self.filters:
-            lc = get_lc(self.light_curves, fltr)
+        for key in self.keys:
+            lc = get_lc(self.light_curves, key=key)
             lo = 1 / (lc.time.max() - lc.time.min())
             hi = .5 / np.min(np.diff(lc.time))
             if lo < minimum_frequency:
@@ -367,7 +388,7 @@ class Analyzer:
             timeseries=self.light_curves,
             signal_column=signal_column,
             uncertainty_column=uncertainty_column,
-            band_labels=self.filters,
+            band_labels=self.keys,
         )
         
         if frequency is None:
@@ -447,7 +468,7 @@ class Analyzer:
         
         phase_bin = isinstance(nbins, int)
         
-        nrows: int = len(self.filters)
+        nrows: int = len(self.keys)
         
         fig, axes = plt.subplots(
             nrows=nrows,
@@ -468,9 +489,9 @@ class Analyzer:
         
         folded_lcs = Table()
         
-        for i, fltr in enumerate(self.filters):
+        for i, key in enumerate(self.keys):
             
-            lc = get_lc(self.light_curves, fltr)
+            lc = get_lc(self.light_curves, key=key)
             folded_lc = Table(lc.fold(
                 period=period,
                 epoch_time=epoch_time - (period / 2),  # shift epoch time by half a period to account for 0.5 phase offset
@@ -489,8 +510,8 @@ class Analyzer:
             
             # plot two periods for clarity
             phase = np.append(0.5 + folded_lc['phase'].value, 1.5 + folded_lc['phase'].value)
-            flux = np.append(folded_lc[f'{fltr}_rel_flux'].value, folded_lc[f'{fltr}_rel_flux'].value)
-            flux_err = np.append(folded_lc[f'{fltr}_rel_flux_err'].value, folded_lc[f'{fltr}_rel_flux_err'].value)
+            flux = np.append(folded_lc[f'{key}_rel_flux'].value, folded_lc[f'{key}_rel_flux'].value)
+            flux_err = np.append(folded_lc[f'{key}_rel_flux_err'].value, folded_lc[f'{key}_rel_flux_err'].value)
             
             axes[i].errorbar(
                 phase,
@@ -518,7 +539,7 @@ class Analyzer:
                 [],
                 marker='none',
                 linestyle='none',
-                label=fltr,
+                label=key,
             )
             
             leg = axes[i].legend(
@@ -565,14 +586,14 @@ class Analyzer:
         
         lcs: Dict[str, Lightcurve] = {}
         
-        for fltr in self.filters:
+        for key in self.keys:
             lc = get_lc(
                 light_curves=self.light_curves,
-                fltr=fltr,
+                key=key,
                 )
-            lcs[fltr] = convert_lc_to_stingray(
+            lcs[key] = convert_lc_to_stingray(
                 lc=lc,
-                fltr=fltr,
+                key=key,
                 t_ref=self.t_ref,
                 )
         
@@ -722,23 +743,23 @@ def tidy_light_curves(
 def validate_light_curves(
     light_curves: TimeSeries | None,
     norm: Literal['max', 'mean', 'none'],
-    filters: List[str],
+    keys: List[str],
     ) -> TimeSeries:
     
     validated_light_curves = TimeSeries()
     
     if light_curves:
-        for fltr in filters:
+        for key in keys:
             
             lc = get_lc(
                 light_curves=light_curves,
-                fltr=fltr,
+                key=key,
                 )
             
             # apply normalisation
-            factor = get_norm_factor(norm, lc[f'{fltr}_rel_flux'].value)
-            lc[f'{fltr}_rel_flux'] /= factor
-            lc[f'{fltr}_rel_flux_err'] /= factor
+            factor = get_norm_factor(norm, lc[f'{key}_rel_flux'].value)
+            lc[f'{key}_rel_flux'] /= factor
+            lc[f'{key}_rel_flux_err'] /= factor
             
             validated_light_curves = vstack([validated_light_curves, lc])
     
@@ -823,7 +844,7 @@ def save_figure(
 
 def convert_lc_to_stingray(
     lc: TimeSeries,
-    fltr: str,
+    key: str,
     t_ref: Time,
     ) -> Lightcurve:
     """
@@ -833,8 +854,8 @@ def convert_lc_to_stingray(
     ----------
     lc : TimeSeries
         The light curve.
-    fltr : str
-        The filter.
+    key : str
+        The camera:filter key.
     t_ref : Time
         The reference time.
     
@@ -845,8 +866,8 @@ def convert_lc_to_stingray(
     """
     
     time = np.asarray((lc.time - t_ref).to_value(u.s))
-    counts = np.asarray(lc[f'{fltr}_rel_flux'].value)
-    err = np.asarray(lc[f'{fltr}_rel_flux_err'].value)
+    counts = np.asarray(lc[f'{key}_rel_flux'].value)
+    err = np.asarray(lc[f'{key}_rel_flux_err'].value)
     
     gti = infer_gtis(time)
     

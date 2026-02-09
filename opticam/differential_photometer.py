@@ -184,7 +184,7 @@ class DifferentialPhotometer:
         if self.show_plots:
             
             plot_light_curves(
-                filters=matched_filters,
+                keys=matched_filters,
                 light_curves=relative_light_curves,
                 t_ref=self.t_ref,
                 y_label='Relative flux',
