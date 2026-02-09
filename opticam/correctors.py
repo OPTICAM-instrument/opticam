@@ -1035,9 +1035,11 @@ class FlatFieldCorrector(Corrector):
             print(f'[OPTICAM] ERROR: inconsistent keys found between the flat-field images and the science images. Flat-field image keys: ({','.join(flat_keys)}); science image keys: ({','.join(science_keys)})')
         
         # if dark noise corrector defined, check dark images have same exposure times as flats
-        valid, flat_exptime, dark_exptime = self._dark_corrector_is_valid()
-        if not valid:
-            print(f'[OPTICAM] ERROR: inconsistent exposure times between flat-field images and dark images. Flat-field exposure time: {flat_exptime} s; dark exposure time: {dark_exptime} s.')
+        if self.dark_corrector is not None:
+            valid, flat_exptime, dark_exptime = self._dark_corrector_is_valid()
+            if not valid:
+                errors += 1
+                print(f'[OPTICAM] ERROR: inconsistent exposure times between flat-field images and dark images. Flat-field exposure time: {flat_exptime} s; dark exposure time: {dark_exptime} s.')
         
         ################################################### warnings ###################################################
         
@@ -1144,8 +1146,7 @@ class FlatFieldCorrector(Corrector):
             dark_exposure_time`.
         """
         
-        if hasattr(self.dark_corrector, 'data_files'):
-            
+        if self.dark_corrector.data_files is not None:
             dark_file = next(iter(self.dark_corrector.data_files.values()))[0]
             dark_header = dark_file.get_header()
             dark_exptime = float(dark_header[self.instrument.exptime_kw])
