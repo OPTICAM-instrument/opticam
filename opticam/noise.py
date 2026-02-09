@@ -352,7 +352,7 @@ def get_noise_params(
         source_coords=coords,
         image_coords=coords,
         psf_params=psf_params,
-        read_noise=instrument.read_noise,
+        read_noise=instrument.get_read_noise(file=file),
         )
     
     # get the number of pixels in the aperture
@@ -425,7 +425,7 @@ def get_snrs(
             bias_var=bias_var,
             dark_var=dark_var,
             flat_var=flat_var,
-            read_noise=instrument.read_noise,
+            read_noise=instrument.get_read_noise(file=file),
             )
         )
 
@@ -469,6 +469,8 @@ def characterise_noise(
         The noies properties.
     """
     
+    read_noise = instrument.get_read_noise(file=file)
+    
     source_ids, fluxes, flux_errs, N_pix, n_sky, bias_var, dark_var, flat_var = get_noise_params(
         file=file,
         catalog=catalog,
@@ -496,14 +498,14 @@ def characterise_noise(
         bias_var=bias_var,
         dark_var=dark_var,
         flat_var=flat_var,
-        read_noise=instrument.read_noise,
+        read_noise=read_noise,
         )
     results['sky_noise'] = get_sky_stderr(N_source, N_pix, n_sky)
     results['shot_noise'] = get_shot_stderr(N_source)
     results['bias'] = get_bias_stderr(N_source, N_pix, bias_var)
     results['dark_noise'] = get_dark_stderr(N_source, N_pix, dark_var)
     results['flat'] = get_flat_stderr(N_source, N_pix, flat_var)
-    results['read_noise'] = get_read_stderr(N_source, N_pix, read_noise=instrument.read_noise)
+    results['read_noise'] = get_read_stderr(N_source, N_pix, read_noise=read_noise)
     
     results['measured_mags'] = -2.5 * np.log10(fluxes)
     results['measured_noise'] = counts_to_mag_factor * flux_errs / fluxes
@@ -514,7 +516,7 @@ def characterise_noise(
         bias_var=bias_var,
         dark_var=dark_var,
         flat_var=flat_var,
-        read_noise=instrument.read_noise,
+        read_noise=read_noise,
         )
     
     return results

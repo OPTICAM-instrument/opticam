@@ -45,28 +45,30 @@ class Instrument(ABC):
         The filter keyword, by default "FILTER".
     gain_kw : str, optional
         The gain keyword, by default "GAIN". Gain values are assumed to be in units of electrons/ADU.
-    dateobs_kw : str, optional
+    dateobs_kw : str, optional\
         The observation date keyword, by default "DATE-OBS". By default, observation dates are assumed to be in
         ISO 8601/FITS format (YYYY-MM-DDTHH:MM:SS[.sss]).
     ra_kw : str, optional
-        The RA keyword, by default RA. RA values are assumed to be in units of hour angle.
+        The RA keyword, by default "RA". RA values are assumed to be in units of hour angle.
     dec_kw : str, optional
-        The DEC keyword, by default DEC. DEC values are assumed to be in units of degrees.
+        The DEC keyword, by default "DEC". DEC values are assumed to be in units of degrees.
+    read_noise_kw : str, optional
+        The read noise keyword, by default "RDNOISE".
     """
 
 
     location: EarthLocation
     pixel_scales: dict[str, float]
-    read_noise: float
     binning_kw: str = 'BINNING'
     camera_kw: str = 'INSTRUME'
     dark_curr_kw: str = 'DARKCURR'
+    dateobs_kw: str = 'DATE-OBS'
+    dec_kw: str = 'DEC'
     exptime_kw: str = 'EXPTIME'
     filter_kw: str = 'FILTER'
     gain_kw: str = 'GAIN'
-    dateobs_kw: str = 'DATE-OBS'
     ra_kw: str = 'RA'
-    dec_kw: str = 'DEC'
+    read_noise_kw: str = 'RDNOISE'
 
 
     def run_checks(
@@ -143,13 +145,19 @@ class Instrument(ABC):
             self.get_binning(header=header)
         except Exception as e:
             errors += 1
-            print(f"[OPTICAM] ERROR: failed to read image binning for file {file.path} extension {file.ext} due to the exception {e} This is either due to an incorrect value being passed to binning_kw and/or your images do not contain a binning keyword. In the latter case, you will need to define a custom instrument with a custom get_binning() method. See https://opticam.readthedocs.io/en/latest/_executed/instruments.html#My-images-don't-contain-a-binning-keyword.-What-should-I-do? for details.")
+            print(f"[OPTICAM] ERROR: failed to read image binning for file {file.path} extension {file.ext} due to the exception {e} This is either due to an incorrect keyword being passed to binning_kw and/or your images do not contain a binning keyword. In the latter case, you will need to define a custom instrument with a custom get_binning() method. See https://opticam.readthedocs.io/en/latest/_executed/instruments.html#My-images-don't-contain-a-binning-keyword.-What-should-I-do? for details.")
         
         try:
             Time(self.get_mjd(header=header), format='mjd')
         except Exception as e:
             errors += 1
-            print(f"[OPTICAM] ERROR: Failed to parse the MJD of the image due the following exception: {e}. This is likely due to an incorrect value being passed to dateobs_kw and/or your images do not give timestamps in FITS format. In the latter case, you will need to define a custom instrument with a custom get_mjd() method. See https://opticam.readthedocs.io/en/latest/_executed/instruments.html#Defining-an-instrument-from-the-opticam.Instrument-base-class for details.")
+            print(f"[OPTICAM] ERROR: Failed to parse the MJD of the image due the following exception: {e}. This is likely due to an incorrect keyword being passed to dateobs_kw and/or your images do not give timestamps in FITS format. In the latter case, you will need to define a custom instrument with a custom get_mjd() method. See https://opticam.readthedocs.io/en/latest/_executed/instruments.html#Defining-an-instrument-from-the-opticam.Instrument-base-class for details.")
+        
+        try:
+            float(self.get_read_noise(header=header))
+        except Exception as e:
+            errors += 1
+            print(f"[OPTICAM] ERROR: Failed to parse the read noise in the image due the following exception: {e}. This is likely due to an incorrect keyword being passed to read_noise_kw or your images do not contain read noise information. In the latter case, you will need to define a custom instrument with a custom get_read_noise() method. See https://opticam.readthedocs.io/en/latest/_executed/instruments.html#Defining-an-instrument-from-the-opticam.Instrument-base-class for details.")
         
         ################################################### warnings ###################################################
         
@@ -375,6 +383,34 @@ class Instrument(ABC):
         return header[self.filter_kw]
 
 
+    def get_read_noise(
+        self,
+        file: MEFSlice | None = None,
+        header: Header | None = None,
+        ) -> float:
+        """
+        Get the read noise in an image, in electrons per pixel, using the instrument's `read_noise_kw` attribute.
+        
+        Parameters
+        ----------
+        file : MEFSlice | None, optional
+            The `MEFSlice` instance corresponding to the file, by default `None`. If `None`, a `Header` must be passed to
+            `header` instead.
+        header : Header, optional
+            The header of the FITS file, by default `None`. If `None`, a `MEFSlice` must be passed to `file` instead.
+        
+        Returns
+        -------
+        float
+            The read noise in the image.
+        """
+        
+        if file is not None:
+            header: Header = file.get_header()
+        
+        return float(header[self.read_noise_kw])
+
+
     @classmethod
     def from_json(
         cls,
@@ -430,7 +466,7 @@ class Instrument(ABC):
         return cls(
             location=location,
             pixel_scales=config['pixel_scales'],
-            read_noise=config['read_noise'],
+            read_noise_kw=config['read_noise_kw'],
             binning_kw=config['binning_kw'],
             dark_curr_kw=config['dark_curr_kw'],
             exptime_kw=config['exptime_kw'],
@@ -473,7 +509,7 @@ class Instrument(ABC):
         template['latitude'] = self.location.lat.to_value(u.deg)
         template['height'] = self.location.height.to_value(u.m)
         template['pixel_scales'] = self.pixel_scales
-        template['read_noise'] = self.read_noise
+        template['read_noise_kw'] = self.read_noise_kw
         template['binning_kw'] = self.binning_kw
         template['dark_curr_kw'] = self.dark_curr_kw
         template['filter_kw'] = self.filter_kw
@@ -536,12 +572,12 @@ def create_template() -> dict[str, Any]:
             'filter_2': 0.0,
             },
         '_pixel_scales_description': 'The pixel-scale in arcsec/pixel for each filter.',
-        'read_noise': 0.0,
-        '_read_noise_description': "The detector's readout noise in electrons/pixel.",
+        'read_noise_kw': 'RDNOISE',
+        '_read_noise_description': "The header keyword that corresponds to the detector's readout noise in electrons/pixel.",
         'binning_kw': 'BINNING',
         '_binning_kw_description': 'The header keyword that corresponds to the binning mode.',
         'dark_curr_kw': 'DARKCURR',
-        '_dark_curr_kw_description': "The header keyword that corresponds to the detector's dark current in electrons/pixel.",
+        '_dark_curr_kw_description': "The header keyword that corresponds to the detector's dark current in electrons/pixel/s.",
         'exptime_kw': 'EXPTIME',
         '_exptime_kw_description': 'The header keyword that corresponds to the exposure time in seconds.',
         'filter_kw': 'FILTER',
@@ -577,7 +613,6 @@ class OPTICAM_MX(Instrument):
             '2': 0.1406,
             '3': 0.1661,
             },
-        read_noise = 1.1,
         exptime_kw='EXPOSURE',
         dateobs_kw='UT',
         ):
@@ -585,7 +620,6 @@ class OPTICAM_MX(Instrument):
         return super().__init__(
             location=location,
             pixel_scales=pixel_scales,
-            read_noise=read_noise,
             exptime_kw=exptime_kw,
             dateobs_kw=dateobs_kw,
             )
@@ -600,15 +634,9 @@ class OPTICAM_MX(Instrument):
         if file is not None:
             header = file.get_header()
         
-        # get DATE-OBS in FITS format
-        instrument_time = str(header[self.dateobs_kw])
-        date, time = instrument_time.split(' ')
-        obs_time = Time(f'{date}T{time}', format="fits")
-        
-        # get exposure time (in seconds)
+        obs_time = Time(str(header[self.dateobs_kw]), format="iso")
         exposure = float(header[self.exptime_kw]) * u.s
         
-        # shift timestamp to mid-exposure
         mjd = np.asarray((obs_time + exposure / 2).mjd)
         
         return float(mjd)
@@ -635,6 +663,14 @@ class OPTICAM_MX(Instrument):
         return 'None'
 
 
+    def get_read_noise(
+        self,
+        file: MEFSlice | None = None,
+        header: Header | None = None,
+        ) -> float:
+        
+        return 1.1
+
 
 
 # TODO: check when this is needed
@@ -645,6 +681,103 @@ class OPTICAM_MX_UNKNOWN(OPTICAM_MX):
         self,
         ):
         super().__init__(dateobs_kw='GPSTIME')
+
+
+
+
+class MEXMAN(Instrument):
+    """
+    OAN-SPM MEXMAN instrument.
+    """
+    
+    def __init__(
+        self,
+        location = EarthLocation.from_geodetic(
+            lon=-115.463611 * u.deg,
+            lat=31.044167 * u.deg,
+            height=2790 * u.m,
+            ),
+        pixel_scales = {
+            'MEXMAN': 1.,
+            },
+        dateobs_kw='JD',
+        read_noise=4.02,
+        binning_kw='CCDSUM',
+        ):
+        
+        return super().__init__(
+            location=location,
+            pixel_scales=pixel_scales,
+            read_noise=read_noise,
+            dateobs_kw=dateobs_kw,
+            binning_kw=binning_kw,
+            )
+
+
+    def get_dark_flux(
+        self,
+        file = None,
+        header = None,
+        ):
+        """
+        TODO: remove this.
+        """
+        
+        return 0.
+
+
+    def get_camera(
+        self,
+        file: MEFSlice | None = None,
+        header: Header | None = None,
+        ) -> str:
+        """
+        Get the camera used to create the file. MEXMAN is a single-camera instrument.
+        
+        Parameters
+        ----------
+        file : MEFSlice | None, optional
+            _description_, by default None
+        header : Header | None, optional
+            _description_, by default None
+        
+        Returns
+        -------
+        str
+            The camera used to create the file.
+        """
+        
+        return 'MEXMAN'
+
+
+    def get_mjd(
+        self,
+        file: MEFSlice | None = None,
+        header: Header | None = None,
+        ) -> float:
+        """
+        Get the timestamp of the image in MJD. MEXMAN uses a "JD" key to represent an image's timestamp in Julian Date
+        format.
+        
+        Parameters
+        ----------
+        file : MEFSlice | None, optional
+            _description_, by default `None`.
+        header : Header | None, optional
+            _description_, by default `None`.
+        
+        Returns
+        -------
+        float
+            The timestamp of the image in MJD.
+        """
+        
+        if file is not None:
+            header = file.get_header()
+        
+        jd = header[self.dateobs_kw]
+        
+        return float(Time(jd, format='jd').mjd)
 
 
 

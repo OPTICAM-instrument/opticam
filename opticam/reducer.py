@@ -840,7 +840,6 @@ class Reducer:
                 cat=cat,
                 targets=growth_curve_targets[key],
                 psf_params=self.psf_params[key],
-                read_noise=self.instrument.read_noise,
                 )
             
             fig.suptitle(key, fontsize='large')
@@ -1212,7 +1211,7 @@ class Reducer:
             source_coords=source_coords,
             image_coords=image_coords,
             psf_params=self.psf_params[key],
-            read_noise=self.instrument.read_noise,
+            read_noise=self.instrument.get_read_noise(file=file),
             )
         
         # add time stamp
@@ -1387,6 +1386,21 @@ def write_queued_logs(
     queued_logs: list[tuple[str, str]],
     logger: Logger,
     ) -> None:
+    """
+    Write queued logs to file.
+    
+    Parameters
+    ----------
+    queued_logs : list[tuple[str, str]]
+        The queued logs (level, log).
+    logger : Logger
+        The logger.
+    
+    Raises
+    ------
+    ValueError
+        If the log level is not recognised.
+    """
     
     for queued_log in queued_logs:
         if len(queued_log) > 0:

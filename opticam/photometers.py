@@ -893,7 +893,6 @@ def get_growth_curve(
     x_centroid: float,
     y_centroid: float,
     r_max: int,
-    read_noise: float,
     ) -> Tuple[NDArray, NDArray]:
     """
     Compute the growth curve for a point in an image.
@@ -908,8 +907,6 @@ def get_growth_curve(
         The y centroid of the point.
     r_max : int
         The maximum radius in pixels.
-    read_noise : float
-        The instrument's read noise.
     
     Returns
     -------
@@ -939,7 +936,7 @@ def get_growth_curve(
             background_rms=0.,
             position=position,
             psf_params={},  # empty dict since not needed
-            read_noise=read_noise,
+            read_noise=0.,
             )[0]
         
         fluxes.append(flux)
