@@ -1,10 +1,12 @@
-from typing import Any, Dict, List
+from pathlib import Path
 import re
+from typing import Any, Dict, List
 
 
 from astropy.timeseries import TimeSeries
 import numpy as np
 from numpy.typing import NDArray
+from matplotlib.figure import Figure
 
 
 from opticam.utils.constants import filter_order
@@ -240,3 +242,23 @@ def filter_key(
     return key.split(':')[-1]
 
 
+def save_figure(
+    fig: Figure,
+    path: Path | str,
+    ) -> None:
+    """
+    Save a figure to the specified path.
+    
+    Parameters
+    ----------
+    fig : Figure
+        The figure.
+    path : Path | str
+        The path, including the file name and extension.
+    """
+    
+    fig.savefig(
+        path,
+        bbox_inches='tight',
+        )
+    print(f'[OPTICAM] Plot saved to {Path(path).resolve()}.')

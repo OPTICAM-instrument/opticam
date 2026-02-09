@@ -25,6 +25,7 @@ from opticam.photometers import AperturePhotometer, get_growth_curve
 from opticam.fitting.models import gaussian
 from opticam.fitting.routines import fit_rms_vs_flux
 from opticam.utils.constants import catalog_colors, fwhm_scale
+from opticam.utils.helpers import save_figure
 from opticam.mef_slice import MEFSlice
 from opticam.utils.helpers import get_lc, sort_dict_by_filters
 
@@ -113,7 +114,10 @@ def plot_catalogs(
             axes[i].set_ylabel("Y", fontsize='large')
     
     if save:
-        fig.savefig(os.path.join(out_directory, "cat/catalogs.pdf"))
+        save_figure(
+            fig=fig,
+            path=out_directory / 'cat' / 'catalogs.pdf',
+        )
     
     if show:
         plt.show(fig)
@@ -213,7 +217,10 @@ def plot_time_between_files(
         ax.tick_params(which="both", direction="in", top=True, right=True)
     
     if save:
-        fig.savefig(os.path.join(out_directory, "diag/header_times.png"))
+        save_figure(
+            fig=fig,
+            path=out_directory / 'diag' / 'header_times.pdf',
+            )
     
     if show:
         plt.show(fig)
@@ -295,7 +302,10 @@ def plot_backgrounds(
         ax.tick_params(which="both", direction="in", top=True, right=True)
     
     if save:
-        fig.savefig(os.path.join(out_directory, "diag/background.pdf"))
+        save_figure(
+            fig=fig,
+            path=out_directory / 'diag' / 'background.pdf',
+            )
     
     if show:
         plt.show()
@@ -364,7 +374,10 @@ def plot_background_meshes(
         axes[i].set_ylabel("Y")
     
     if save:
-        fig.savefig(os.path.join(out_directory, 'diag/background_meshes.pdf'))
+        save_figure(
+            fig=fig,
+            path=out_directory / 'diag' / 'background_meshes.pdf',
+            )
     
     if show:
         plt.show(fig)
@@ -612,11 +625,9 @@ def plot_psf(
             )
     
     fig.suptitle(f'{key} Source {source_indx + 1}', fontsize='large')
-    fig.savefig(
-        os.path.join(
-            out_directory,
-            f'psfs/{key}_source_{source_indx + 1}.pdf',
-            ),
+    save_figure(
+        fig=fig,
+        path=out_directory / 'psfs' / f'{key}_source_{source_indx + 1}.pdf',
         )
     plt.close(fig)
 
@@ -663,64 +674,62 @@ def plot_rms_vs_median_flux(
             },
         )
     
-    for i, fltr in enumerate(data.keys()):
-        ax1 = axes[0][i]
-        ax2 = axes[1][i]
-        
+    for i, key in enumerate(data.keys()):
         if i == 0:
-            ax1.set_ylabel(
+            axes[0][i].set_ylabel(
                 'Flux RMS [counts]',
                 fontsize='large',
                 )
-            
-            ax2.set_ylabel(
+            axes[1][i].set_ylabel(
                 '$\\frac{\\rm RMS}{\\rm model}$',
                 fontsize='xx-large',
                 )
         
-        ax2.set_xlabel(
+        axes[1][i].set_xlabel(
             'Median flux [counts]',
             fontsize='large',
             )
         
-        ax1.set_title(
-            fltr,
+        axes[0][i].set_title(
+            key,
             fontsize='large',
             )
         
         # plot model
-        ax1.plot(
-            pl_fits[fltr]['flux'],
-            pl_fits[fltr]['rms'],
+        axes[0][i].plot(
+            pl_fits[key]['flux'],
+            pl_fits[key]['rms'],
             color='blue',
             lw=1,
             )
-        ax1.fill_between(
-            pl_fits[fltr]['flux'],
-            pl_fits[fltr]['rms'] - pl_fits[fltr]['err'],
-            pl_fits[fltr]['rms'] + pl_fits[fltr]['err'],
+        axes[0][i].fill_between(
+            pl_fits[key]['flux'],
+            pl_fits[key]['rms'] - pl_fits[key]['err'],
+            pl_fits[key]['rms'] + pl_fits[key]['err'],
             color='grey',
             edgecolor='none',
             alpha=.5,
             )
         
+        ratios = []
         # highlight potentially variable sources
-        for source_number, values in data[fltr].items():
-            i = np.where(pl_fits[fltr]['flux'] == values['flux'])[0]
-            r = values['rms'] / pl_fits[fltr]['rms'][i]
+        for source_number, values in data[key].items():
+            j = np.where(pl_fits[key]['flux'] == values['flux'])[0]
+            r = values['rms'] / pl_fits[key]['rms'][j]
+            ratios.append(r)
             
-            if r - 1 >= pl_fits[fltr]['err'][i] / pl_fits[fltr]['rms'][i]:
+            if r - 1 >= pl_fits[key]['err'][j] / pl_fits[key]['rms'][j]:
                 color = 'red'
             else:
                 color = 'black'
             
-            ax1.scatter(
+            axes[0][i].scatter(
                 values['flux'],
                 values['rms'],
                 marker='.',
                 color=color,
                 )
-            ax1.text(
+            axes[0][i].text(
                 values['flux'] * 1.03,
                 values['rms'] * 1.03,
                 str(source_number),
@@ -728,13 +737,13 @@ def plot_rms_vs_median_flux(
                 fontsize='large',
                 )
             
-            ax2.scatter(
+            axes[1][i].scatter(
                 values['flux'],
                 r,
                 marker='.',
                 color=color,
                 )
-            ax2.text(
+            axes[1][i].text(
                 values['flux'] * 1.015,
                 r * 1.015,
                 str(source_number),
@@ -742,32 +751,42 @@ def plot_rms_vs_median_flux(
                 color=color,
                 )
         
-        ax1.set_yscale('log')
+        axes[0][i].set_yscale('log')
         
-        ax2.plot(
-            pl_fits[fltr]['flux'],
-            np.ones_like(pl_fits[fltr]['flux']),
+        axes[1][i].plot(
+            pl_fits[key]['flux'],
+            np.ones_like(pl_fits[key]['flux']),
             color='blue',
             lw=1,
             )
-        ax2.fill_between(
-            pl_fits[fltr]['flux'],
-            1 - pl_fits[fltr]['err'] / pl_fits[fltr]['rms'],
-            1 + pl_fits[fltr]['err'] / pl_fits[fltr]['rms'],
+        axes[1][i].fill_between(
+            pl_fits[key]['flux'],
+            1 - pl_fits[key]['err'] / pl_fits[key]['rms'],
+            1 + pl_fits[key]['err'] / pl_fits[key]['rms'],
             color='grey',
             edgecolor='none',
             alpha=.5,
             )
         
-        lo, hi = ax2.get_ylim()
-        ax2.set_ylim(lo * 0.95, hi * 1.05)
+        lo = np.min(ratios) * .75
+        hi = np.max(ratios) * 1.25
+        ax_lo, ax_hi = axes[1][i].get_ylim()
+        if lo < ax_lo and hi > ax_hi:
+            axes[1][i].set_ylim(lo, hi)
+        elif hi > ax_hi:
+            axes[1][i].set_ylim(ax_lo, hi)
+        elif lo < ax_lo:
+            axes[1][i].set_ylim(lo, ax_hi)
     
     for ax in axes.flatten():
         ax.set_xscale('log')
         ax.minorticks_on()
         ax.tick_params(which='both', direction='in', top=True, right=True)
     
-    fig.savefig(os.path.join(save_dir, f'{phot_label}_rms_vs_median.pdf'), bbox_inches='tight')
+    save_figure(
+        fig=fig,
+        path=save_dir / f'{phot_label}_rms_vs_median.pdf',
+        )
     
     if show:
         plt.show(fig)
@@ -928,9 +947,9 @@ def plot_snrs(
         ax.tick_params(which='both', direction='in', right=True, top=True)
     
     if save:
-        fig.savefig(
-            os.path.join(out_directory, 'diag/snrs.pdf'),
-            bbox_inches='tight',
+        save_figure(
+            fig=fig,
+            path=out_directory / 'diag' / 'snrs.pdf',
             )
     
     if show:
@@ -995,7 +1014,7 @@ def plot_noise(
             'wspace': 0,
             'height_ratios': [4, 1],
             },
-        figsize=(2 / 3 * ncols * 6.4, 5),
+        figsize=(2 / 3 * ncols * 6.4, 4.8),
         )
     
     for i, (fltr, file) in enumerate(files.items()):
@@ -1107,9 +1126,9 @@ def plot_noise(
         )
     
     if save:
-        fig.savefig(
-            os.path.join(out_directory, 'diag/noise_characterisation.pdf'),
-            bbox_inches='tight',
+        save_figure(
+            fig=fig,
+            path=out_directory / 'diag' / 'noise_characterisation.pdf',
             )
     
     if show:
@@ -1297,10 +1316,13 @@ def plot_apertures(
     fig.suptitle(key)
     
     if save:
-        save_path = os.path.join(out_directory, 'diag/apertures')
-        if not os.path.isdir(save_path):
-            os.makedirs(save_path)
-        fig.savefig(os.path.join(save_path, f'{key}_apertures.pdf'))
+        save_path = out_directory / 'diag' / 'apertures'
+        if not save_path.is_dir():
+            save_path.mkdir(parents=True)
+        save_figure(
+            fig=fig,
+            path=save_path / f'{key}_apertures.pdf',
+            )
     
     if show:
         plt.show(fig)
