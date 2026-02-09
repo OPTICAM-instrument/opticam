@@ -17,6 +17,7 @@ from stingray import Lightcurve
 
 from opticam.utils.helpers import get_lc, sort_filters
 from opticam.plotting.plots import plot_light_curves
+from opticam.utils.helpers import save_figure
 from opticam.utils.time_helpers import infer_gtis
 
 
@@ -745,6 +746,23 @@ def validate_light_curves(
     norm: Literal['max', 'mean', 'none'],
     keys: List[str],
     ) -> TimeSeries:
+    """
+    Validate light curves. This ensures light curves are normalised and groups redundant rows.
+    
+    Parameters
+    ----------
+    light_curves : TimeSeries | None
+        The light curves.
+    norm : Literal[&#39;max&#39;, &#39;mean&#39;, &#39;none&#39;]
+        The normalisation.
+    keys : List[str]
+        The light curve keys.
+    
+    Returns
+    -------
+    TimeSeries
+        The validated light curves.
+    """
     
     validated_light_curves = TimeSeries()
     
@@ -818,28 +836,6 @@ def scale_ax(
         ax.set_xscale('log')
     if scale == 'semilogy' or scale == 'loglog':
         ax.set_yscale('log')
-
-
-def save_figure(
-    fig: Figure,
-    path: Path,
-    ) -> None:
-    """
-    Save a figure to the specified path.
-    
-    Parameters
-    ----------
-    fig : Figure
-        The figure.
-    path : Path
-        The path.
-    """
-    
-    fig.savefig(
-        path,
-        bbox_inches='tight',
-        )
-    print(f'[OPTICAM] Plot saved to {path}.')
 
 
 def convert_lc_to_stingray(
