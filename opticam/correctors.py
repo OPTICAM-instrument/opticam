@@ -943,9 +943,10 @@ class FlatFieldCorrector(Corrector):
             return
         
         if not self.passed_checks:
-            valid, flat_exptime, dark_exptime = self._dark_corrector_is_valid()
-            if not valid:
-                raise ValueError(f'[OPTICAM] inconsistent exposure times between flat-field images and dark images. Flat-field exposure time: {flat_exptime} s; dark exposure time: {dark_exptime} s.')
+            if self.dark_corrector is not None:
+                valid, flat_exptime, dark_exptime = self._dark_corrector_is_valid()
+                if not valid:
+                    raise ValueError(f'[OPTICAM] inconsistent exposure times between flat-field images and dark images. Flat-field exposure time: {flat_exptime} s; dark exposure time: {dark_exptime} s.')
         
         for key in self.data_files.keys():
             
