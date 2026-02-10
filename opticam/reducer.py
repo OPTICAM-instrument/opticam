@@ -877,12 +877,7 @@ class Reducer:
             a = self.psf_params[key]['semimajor_sigma']
             b = self.psf_params[key]['semiminor_sigma']
             
-            for source_indx in tqdm(
-                range(len(self.catalogs[key])),
-                disable=not self.verbose,
-                desc=f'[OPTICAM] Plotting {key} PSFs',
-                bar_format=bar_format,
-                ):
+            for source_indx in range(len(self.catalogs[key])):
                 plot_psf(
                     catalog=self.catalogs[key],
                     source_indx=source_indx,
