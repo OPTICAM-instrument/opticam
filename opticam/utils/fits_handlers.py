@@ -10,9 +10,9 @@ import os.path
 
 from opticam.correctors import BiasCorrector, DarkNoiseCorrector, FlatFieldCorrector
 from opticam.mef_slice import MEFSlice
+from opticam.timing.helpers import apply_barycentric_correction
 from opticam.utils.helpers import camera_and_filter_key
 from opticam.utils.image_helpers import rebin_image
-from opticam.utils.time_helpers import apply_barycentric_correction
 from opticam.instruments import Instrument
 
 

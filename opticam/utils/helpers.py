@@ -3,7 +3,6 @@ import re
 from typing import Any, Dict, List
 
 
-from astropy.timeseries import TimeSeries
 import numpy as np
 from numpy.typing import NDArray
 from matplotlib.figure import Figure
@@ -127,53 +126,6 @@ def propagate_errors(
     total_variance += flat_var
     
     return np.sqrt(total_variance)
-
-
-def get_lc(
-    light_curves: TimeSeries,
-    key: str,
-    ) -> TimeSeries:
-    """
-    Given a table of light curves, extract the light curve for a single key.
-    
-    Parameters
-    ----------
-    light_curves : TimeSeries
-        The table of light curves.
-    key : str
-        The camera:filter key (e.g., "1:g" for camera 1 with a g filter).
-    
-    Returns
-    -------
-    TimeSeries
-        The light curve for the filter.
-    """
-    
-    colnames = light_curves.colnames
-    new_colnames = []
-    
-    for colname in colnames:
-        # get filter fluxes
-        if 'rel_flux' in colname:
-            if f'{key}_rel_flux' in colname:
-                new_colnames.append(colname)
-        # get filter backgrounds if included
-        elif 'bkg' in colname:
-            if f'{key}_bkg' in colname:
-                new_colnames.append(colname)
-        # include all non-flux/non-background columns (time, time_bin_start, etc.)
-        else:
-            new_colnames.append(colname)
-    
-    lc = light_curves[*new_colnames]
-    
-    # remove NaN rows
-    f = np.asarray(lc[f'{key}_rel_flux'].value)
-    ferr = np.asarray(lc[f'{key}_rel_flux_err'].value)
-    mask = np.where(np.isnan(f) | np.isnan(ferr))[0]
-    lc.remove_rows(mask)
-    
-    return TimeSeries(lc)
 
 
 def camera_and_filter_key(

@@ -15,10 +15,10 @@ import matplotlib.pyplot as plt
 from stingray import Lightcurve
 
 
-from opticam.utils.helpers import get_lc, sort_filters
 from opticam.plotting.plots import plot_light_curves
+from opticam.timing.timeseries import get_lc, infer_gtis
+from opticam.utils.helpers import sort_filters
 from opticam.utils.helpers import save_figure
-from opticam.utils.time_helpers import infer_gtis
 
 
 

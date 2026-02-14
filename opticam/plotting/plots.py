@@ -27,7 +27,8 @@ from opticam.fitting.routines import fit_rms_vs_flux
 from opticam.utils.constants import catalog_colors, fwhm_scale
 from opticam.utils.helpers import save_figure
 from opticam.mef_slice import MEFSlice
-from opticam.utils.helpers import get_lc, sort_dict_by_filters
+from opticam.timing.timeseries import get_lc
+from opticam.utils.helpers import sort_dict_by_filters
 
 
 
