@@ -27,9 +27,7 @@ class Instrument(ABC):
     location : EarthLocation
         The location of the observatory as an `astropy.coordinates.EarthLocation` object.
     pixel_scales : dict[str, float]
-        The pixel scales for each filter in arcsec/pixel {filter: pixel scale}.
-    read_noise : float
-        The detector's read noise in electrons/pixel.
+        The pixel scales for each camera in arcsec/pixel {camera: pixel scale}.
     binning_kw : str, optional
         The binning keyword, by default "BINNING".
     camera_kw : str, optional
@@ -39,19 +37,19 @@ class Instrument(ABC):
     dark_curr_kw : str, optional
         The dark current keyword, by default "DARKCURR". Dark current values are assumed to be in 
         electrons/pixel.
+    dateobs_kw : str, optional
+        The observation date keyword, by default "DATE-OBS". By default, observation dates are assumed to be in
+        ISO 8601/FITS format (YYYY-MM-DDTHH:MM:SS[.sss]).
+    dec_kw : str, optional
+        The DEC keyword, by default "DEC". DEC values are assumed to be in units of degrees.
     exptime_kw : str, optional
         The exposure time keyword, by default "EXPTIME". Exposure times are assumed to be in units of seconds.
     filter_kw : str, optional
         The filter keyword, by default "FILTER".
     gain_kw : str, optional
         The gain keyword, by default "GAIN". Gain values are assumed to be in units of electrons/ADU.
-    dateobs_kw : str, optional\
-        The observation date keyword, by default "DATE-OBS". By default, observation dates are assumed to be in
-        ISO 8601/FITS format (YYYY-MM-DDTHH:MM:SS[.sss]).
     ra_kw : str, optional
         The RA keyword, by default "RA". RA values are assumed to be in units of hour angle.
-    dec_kw : str, optional
-        The DEC keyword, by default "DEC". DEC values are assumed to be in units of degrees.
     read_noise_kw : str, optional
         The read noise keyword, by default "RDNOISE".
     """
@@ -394,8 +392,8 @@ class Instrument(ABC):
         Parameters
         ----------
         file : MEFSlice | None, optional
-            The `MEFSlice` instance corresponding to the file, by default `None`. If `None`, a `Header` must be passed to
-            `header` instead.
+            The `MEFSlice` instance corresponding to the file, by default `None`. If `None`, a `Header` must be passed 
+            to `header` instead.
         header : Header, optional
             The header of the FITS file, by default `None`. If `None`, a `MEFSlice` must be passed to `file` instead.
         
@@ -613,9 +611,23 @@ class OPTICAM_MX(Instrument):
             '2': 0.1406,
             '3': 0.1661,
             },
-        exptime_kw='EXPOSURE',
         dateobs_kw='UT',
-        ):
+        exptime_kw='EXPOSURE',
+        ) -> None:
+        """
+        Interface for the OAN-SPM OPTICAM instrument.
+        
+        Parameters
+        ----------
+        location : EarthLocation
+            The location of the observatory.
+        pixel_scales : dict
+            The instrument's pixel scales.
+        dateobs_kw : str
+            The observation date keyword.
+        exptime_kw : str
+            The exposure time keyword.
+        """
         
         return super().__init__(
             location=location,
@@ -630,6 +642,23 @@ class OPTICAM_MX(Instrument):
         file: MEFSlice | None = None,
         header: Header | None = None,
         ) -> float:
+        """
+        Get the timestamp of the image in MJD. OPTICAM uses a "UT" keyword to represent an image's timestamp in ISO
+        format.
+        
+        Parameters
+        ----------
+        file : MEFSlice | None, optional
+            The `MEFSlice` instance corresponding to the file, by default `None`. If `None`, a `Header` must be passed 
+            to `header` instead.
+        header : Header, optional
+            The header of the FITS file, by default `None`. If `None`, a `MEFSlice` must be passed to `file` instead.
+        
+        Returns
+        -------
+        float
+            The timestamp of the image in MJD format.
+        """
         
         if file is not None:
             header = file.get_header()
@@ -692,38 +721,38 @@ class MEXMAN(Instrument):
     
     def __init__(
         self,
-        location = EarthLocation.from_geodetic(
+        location: EarthLocation = EarthLocation.from_geodetic(
             lon=-115.463611 * u.deg,
             lat=31.044167 * u.deg,
             height=2790 * u.m,
             ),
-        pixel_scales = {
+        pixel_scales: dict[str, float] = {
             'MEXMAN': 1.,
             },
-        dateobs_kw='JD',
-        read_noise=4.02,
-        binning_kw='CCDSUM',
-        ):
+        dateobs_kw: str = 'JD',
+        binning_kw: str = 'CCDSUM',
+        ) -> None:
+        """
+        Interface for the OAN-SPM MEXMAN instrument.
+        
+        Parameters
+        ----------
+        location : EarthLocation
+            The location of the observatory.
+        pixel_scales : dict
+            The instrument's pixel scale.
+        dateobs_kw : str, optional
+            The observation date keyword.
+        binning_kw : str, optional
+            The binning keyword.
+        """
         
         return super().__init__(
             location=location,
             pixel_scales=pixel_scales,
-            read_noise=read_noise,
             dateobs_kw=dateobs_kw,
             binning_kw=binning_kw,
             )
-
-
-    def get_dark_flux(
-        self,
-        file = None,
-        header = None,
-        ):
-        """
-        TODO: remove this.
-        """
-        
-        return 0.
 
 
     def get_camera(
@@ -732,14 +761,16 @@ class MEXMAN(Instrument):
         header: Header | None = None,
         ) -> str:
         """
-        Get the camera used to create the file. MEXMAN is a single-camera instrument.
+        Get the camera used to create the file. Since MEXMAN is a single-camera instrument, the name of the instrument
+        is returned.
         
         Parameters
         ----------
         file : MEFSlice | None, optional
-            _description_, by default None
-        header : Header | None, optional
-            _description_, by default None
+            The `MEFSlice` instance corresponding to the file, by default `None`. If `None`, a `Header` must be passed 
+            to `header` instead.
+        header : Header, optional
+            The header of the FITS file, by default `None`. If `None`, a `MEFSlice` must be passed to `file` instead.
         
         Returns
         -------
@@ -756,20 +787,21 @@ class MEXMAN(Instrument):
         header: Header | None = None,
         ) -> float:
         """
-        Get the timestamp of the image in MJD. MEXMAN uses a "JD" key to represent an image's timestamp in Julian Date
-        format.
+        Get the timestamp of the image in MJD. MEXMAN uses a "JD" keyword to represent an image's timestamp in Julian 
+        Date format.
         
         Parameters
         ----------
         file : MEFSlice | None, optional
-            _description_, by default `None`.
-        header : Header | None, optional
-            _description_, by default `None`.
+            The `MEFSlice` instance corresponding to the file, by default `None`. If `None`, a `Header` must be passed 
+            to `header` instead.
+        header : Header, optional
+            The header of the FITS file, by default `None`. If `None`, a `MEFSlice` must be passed to `file` instead.
         
         Returns
         -------
         float
-            The timestamp of the image in MJD.
+            The timestamp of the image in MJD format.
         """
         
         if file is not None:
@@ -777,7 +809,7 @@ class MEXMAN(Instrument):
         
         jd = header[self.dateobs_kw]
         
-        return float(Time(jd, format='jd').mjd)
+        return Time(jd, format='jd').mjd
 
 
 
