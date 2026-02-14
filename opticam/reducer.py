@@ -14,7 +14,7 @@ import numpy as np
 from numpy.typing import NDArray
 import pandas as pd
 from photutils.segmentation import detect_threshold
-from skimage.transform import SimilarityTransform, warp
+from skimage.transform import matrix_transform, SimilarityTransform, warp
 from tqdm.contrib.concurrent import process_map
 from tqdm import tqdm
 
@@ -1105,7 +1105,7 @@ class Reducer:
                 self.logger.info(f'Skipping {key} since existing light curves files were found. To overwrite these files, set overwrite=True.')
                 continue
             
-            source_coords = np.array([self.catalogs[key]["xcentroid"].value,  # type: ignore
+            cat_coords = np.array([self.catalogs[key]["xcentroid"].value,  # type: ignore
                                       self.catalogs[key]["ycentroid"].value],  # type:ignore
                                      ).T
             
@@ -1115,7 +1115,7 @@ class Reducer:
                 partial(
                     self._perform_photometry,
                     photometer=photometer,
-                    source_coords=source_coords,
+                    cat_coords=cat_coords,
                     key=key,
                 ),
                 files,
@@ -1147,7 +1147,7 @@ class Reducer:
         self,
         file: MEFSlice,
         photometer: BasePhotometer,
-        source_coords: NDArray,
+        cat_coords: NDArray,
         key: str,
         ) -> dict[str, list]:
         """
@@ -1159,8 +1159,8 @@ class Reducer:
             The file.
         photometer : BasePhotometer
             The photometer to use.
-        source_coords : NDArray
-            The coordinates of the sources.
+        cat_coords : NDArray
+            The coordinates of the sources in the catalog.
         key : str
             The camera:filter key.
         
@@ -1197,13 +1197,16 @@ class Reducer:
                                     tbl["ycentroid"].value],
                                     ).T
         
+        # apply transform to catalogue coordinates
+        transformed_cat_coords = matrix_transform(cat_coords, self.transforms[file.key])
+        
         results = photometer.compute(
             image=image,
             bias_var=bias_var,
             dark_var=dark_var,
             flat_var=flat_var,
             background_rms=background_rms,
-            source_coords=source_coords,
+            cat_coords=transformed_cat_coords,
             image_coords=image_coords,
             psf_params=self.psf_params[key],
             read_noise=self.instrument.get_read_noise(file=file),
