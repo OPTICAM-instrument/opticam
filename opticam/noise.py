@@ -349,7 +349,7 @@ def get_noise_params(
         dark_var=dark_var,
         flat_var=flat_var,
         background_rms=np.sqrt(n_sky),
-        source_coords=coords,
+        cat_coords=coords,
         image_coords=coords,
         psf_params=psf_params,
         read_noise=instrument.get_read_noise(file=file),
