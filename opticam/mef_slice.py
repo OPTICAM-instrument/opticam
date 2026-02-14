@@ -96,7 +96,6 @@ class MEFSlice:
 
 
 
-
 def create_file_paths(
     data_directory: Path,
     ) -> list[MEFSlice]:
@@ -116,7 +115,7 @@ def create_file_paths(
     
     file_paths: list[MEFSlice] = []
     
-    fits_files = list(data_directory.glob('*fit*'))
+    fits_files = list(data_directory.glob('*'))
     
     for path in tqdm(fits_files, desc='[OPTICAM] Scanning data directory', bar_format=bar_format):
         try:
