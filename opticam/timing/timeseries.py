@@ -1,4 +1,6 @@
+from astropy.time import Time
 from astropy.timeseries import TimeSeries
+from astropy.units import Quantity
 import numpy as np
 from numpy.typing import NDArray
 
@@ -25,34 +27,23 @@ def get_lc(
         The light curve for the filter.
     """
     
-    colnames = light_curves.colnames
-    new_colnames = []
+    flux_col = f'{key}_rel_flux'
+    err_col = f'{key}_rel_flux_err'
     
-    for colname in colnames:
-        # get filter fluxes
-        if 'rel_flux' in colname:
-            if f'{key}_rel_flux' in colname:
-                new_colnames.append(colname)
-        # get filter backgrounds if included
-        elif 'bkg' in colname:
-            if f'{key}_bkg' in colname:
-                new_colnames.append(colname)
-        # include all non-flux/non-background columns (time, time_bin_start, etc.)
-        else:
-            new_colnames.append(colname)
+    time_arr = light_curves['time']
+    flux_arr = light_curves[flux_col]
+    err_arr = light_curves[err_col]
     
-    lc = light_curves[*new_colnames]
+    mask = np.isfinite(flux_arr) & np.isfinite(err_arr)
     
-    # remove NaN rows
-    f = np.asarray(lc[f'{key}_rel_flux'].value)
-    ferr = np.asarray(lc[f'{key}_rel_flux_err'].value)
-    mask = np.where(np.isnan(f) | np.isnan(ferr))[0]
-    lc.remove_rows(mask)
+    new_lc = TimeSeries(time=time_arr[mask])
+    new_lc[flux_col] = flux_arr[mask]
+    new_lc[err_col] = err_arr[mask]
     
-    return TimeSeries(lc)
+    return new_lc
 
 
-def split_timeseries_by_gaps(
+def split_timeseries_on_gaps(
     ts: TimeSeries,
     threshold: float = 1.5,
     ) -> list[TimeSeries]:
@@ -64,7 +55,7 @@ def split_timeseries_by_gaps(
     ts : TimeSeries
         The time series, assumed to contain gaps.
     threshold : float, optional
-        The gap detection threshold, by default 1.5 times the minimum time delta.
+        The gap detection threshold, by default 1.5 times the median time delta.
     
     Returns
     -------
@@ -74,9 +65,9 @@ def split_timeseries_by_gaps(
     
     ts_list = []
     
-    dt = np.diff(ts['time'].mjd)  # convert to MJD (or any other format) to remove units
-    gap_indices = np.where(dt > threshold * np.median(dt))[0]
-    edge_indices = np.concat(([0], gap_indices, [len(ts)]))
+    dt = np.diff(ts['time'].mjd)  # convert to MJD to remove units
+    gap_indices = np.where(dt > threshold * np.median(dt))[0] + 1  # add 1 to shift index to first point after gap
+    edge_indices = np.concat(([0], gap_indices, [len(ts)]))  # include start and end of time series
     
     for i in range(1, len(edge_indices)):
         ts_list.append(ts[edge_indices[i-1]:edge_indices[i]])
@@ -89,14 +80,14 @@ def segment_timeseries(
     segment_size: Quantity,
     ) -> list[TimeSeries]:
     """
-    Split a time series into equal length segments.
+    Split a time series into equal length, contiguous segments.
     
     Parameters
     ----------
     ts : TimeSeries
-        The time series, assumed to be contiguous.
+        The time series.
     segment_size : Quantity
-        The segmen size.
+        The segment size.
     
     Returns
     -------
@@ -104,19 +95,23 @@ def segment_timeseries(
         The time series segments.
     """
     
+    segments: list[TimeSeries] = []
+    
+    # split time series on gaps
+    ts_list = split_timeseries_on_gaps(ts)
+    
     n: int = get_segment_size(
-        ts=ts,
+        ts=ts_list[0],
         segment_size=segment_size,
         )
     
-    ts_segments: list[TimeSeries] = []
+    for ts in ts_list:
+        prev = 0
+        while prev + n <= len(ts):
+            segments.append(TimeSeries(ts[prev:prev + n]))
+            prev += n
     
-    prev = 0
-    while prev + n < len(ts):
-        ts_segments.append(TimeSeries(ts[prev:prev + n]))
-        prev += n
-    
-    return ts_segments
+    return segments
 
 
 
@@ -146,16 +141,16 @@ def get_segment_size(
 
 
 def infer_gtis(
-    time: NDArray,
+    time: NDArray | Time | Quantity,
     threshold: float = 1.5,
     ) -> NDArray:
     """
-    Infer the Good Time Intervals from a light curve.
+    Infer the Good Time Intervals from a time array.
     
     Parameters
     ----------
-    time : ArrayLike
-        The time array.
+    time : NDArray | Time | Quantity
+        The time array. If this array has units, the resulting GTIs will have the same units.
     threshold : float, optional
         The gap detection threshold, by default 1.5 times the minimum time delta.
     
