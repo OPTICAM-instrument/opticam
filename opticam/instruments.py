@@ -727,7 +727,7 @@ class MEXMAN(Instrument):
             height=2790 * u.m,
             ),
         pixel_scales: dict[str, float] = {
-            'MEXMAN': 1.,
+            'MEXMAN': 0.24645,
             },
         dateobs_kw: str = 'JD',
         binning_kw: str = 'CCDSUM',
