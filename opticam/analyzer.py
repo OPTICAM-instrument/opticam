@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Dict, List, Literal, Tuple
+from typing import Callable, Literal
 
 
 from astropy.table import MaskedColumn, Table, QTable, vstack
@@ -61,7 +61,7 @@ class Analyzer:
         
         if light_curves:
             lc_cols = light_curves.colnames
-            filter_cols: List[str] = [col for col in lc_cols if '_rel_flux_err' in col]
+            filter_cols: list[str] = [col for col in lc_cols if '_rel_flux_err' in col]
             keys = [col.replace('_rel_flux_err', '') for col in filter_cols]
             self.keys = sort_filters(list(set(keys)))
         else:
@@ -124,7 +124,7 @@ class Analyzer:
     def rebin(
         self,
         time_bin_size: Quantity,
-        method: Literal['mean', 'sum'] = 'mean',
+        method: Literal['mean'] = 'mean',
         ) -> 'Analyzer':
         """
         Rebin the light curves, propagating errors accordingly. Returns a new `Analyzer` instance containing the binned
@@ -143,15 +143,22 @@ class Analyzer:
             A new `Analyzer` instance containing the binned light curves.
         """
         
-        new_lcs = rebin(
-            method=method,
-            light_curves=self.light_curves,
-            time_bin_size=time_bin_size,
-            )
+        binned_lcs = TimeSeries()
+        
+        for key in self.keys:
+            # rebin light curves one at a time to ensure correct GTI handling
+            lc = self.get_lc(key)
+            binned_lc = rebin(
+                method=method,
+                light_curves=lc,
+                time_bin_size=time_bin_size,
+                )
+            
+            binned_lcs = vstack([binned_lcs, binned_lc])
         
         return Analyzer(
             out_directory=self.out_directory,
-            light_curves=new_lcs,
+            light_curves=binned_lcs,
             norm=self.norm,
             prefix=self.prefix,
             phot_label=self.phot_label,
@@ -231,7 +238,7 @@ class Analyzer:
         scale: Literal['linear', 'semilogx', 'semilogy', 'loglog'] = 'linear',
         save: bool = True,
         return_fig: bool = False,
-        ) -> Dict[str, LombScargle] | Tuple[Dict[str, LombScargle], Figure]:
+        ) -> dict[str, LombScargle] | tuple[dict[str, LombScargle], Figure]:
         """
         Compute the Lomb-Scargle periodogram for each light curve.
         
@@ -249,7 +256,7 @@ class Analyzer:
         
         Returns
         -------
-        Dict[str, LombScargle] | Tuple[Dict[str, LombScargle], Figure]
+        dict[str, LombScargle] | tuple[dict[str, LombScargle], Figure]
             If `return_fig=True`, the Lomb-Scargle periodograms and figure are returned. Otherwise, only the
             Lomb-Scargle periodograms are returned.
         """
@@ -269,7 +276,7 @@ class Analyzer:
         if nrows == 1:
             axes = [axes]
         
-        lsps: Dict[str, LombScargle] = {}
+        lsps: dict[str, LombScargle] = {}
         
         for i, key in enumerate(self.keys):
             
@@ -342,7 +349,7 @@ class Analyzer:
         scale: Literal['linear', 'semilogx', 'semilogy', 'loglog'] = 'linear',
         save: bool = True,
         return_fig: bool = False,
-        ) -> LombScargleMultiband | Tuple[LombScargleMultiband, Figure]:
+        ) -> LombScargleMultiband | tuple[LombScargleMultiband, Figure]:
         """
         Compute the multiband Lomb-Scargle periodogram from all light curves.
         
@@ -360,7 +367,7 @@ class Analyzer:
         
         Returns
         -------
-        LombScargleMultiband | Tuple[LombScargleMultiband, Figure]
+        LombScargleMultiband | tuple[LombScargleMultiband, Figure]
             If `return_fig=True`, the multiband Lomb-Scargle periodogram and figure are returned. Otherwise, only the
             multiband Lomb-Scargle periodogram is returned.
         """
@@ -439,7 +446,7 @@ class Analyzer:
         sharey: bool = False,
         save: bool = True,
         return_fig: bool = False,
-        ) -> Table | Tuple[Table, Figure]:
+        ) -> Table | tuple[Table, Figure]:
         """
         Fold the light curves on the given period.
         
@@ -461,7 +468,7 @@ class Analyzer:
         
         Returns
         -------
-        Table | Tuple[Table, Figure]
+        Table | tuple[Table, Figure]
             If `return_fig=True`, the folded light curve and resulting figure are returned. Otherwise, just the folded
             time series is returned. The folded light curve is converted from a `TimeSeries` to a `Table` since the
             `fold()` method of `TimeSeries` replaces the time column with phase values, causing time formatting errors.
@@ -574,18 +581,18 @@ class Analyzer:
             return folded_lcs, fig
 
 
-    def export_light_curves_to_stingray(self) -> Dict[str, Lightcurve]:
+    def export_light_curves_to_stingray(self) -> dict[str, Lightcurve]:
         """
         Export the light curves from an `astropy.timeseries.TimeSeries` table to a dictionary of `stingray.Lightcurve`
         instances.
         
         Returns
         -------
-        Dict[str, Lightcurve]
+        dict[str, Lightcurve]
             The light curves {filter: Lightcurve}.
         """
         
-        lcs: Dict[str, Lightcurve] = {}
+        lcs: dict[str, Lightcurve] = {}
         
         for key in self.keys:
             lc = get_lc(
@@ -604,7 +611,7 @@ class Analyzer:
 
 
 def rebin(
-    method: Literal['mean', 'sum'],
+    method: Literal['mean'],
     light_curves: Table | TimeSeries | QTable,
     time_bin_size: Quantity | None = None,
     nbins: int | None = None,
@@ -632,7 +639,7 @@ def rebin(
     
     Raises
     ------
-    NotImplementedError
+    ValueError
         If the value passed to `method` is not recognised.
     ValueError
         If neither `time_bin_size` or `nbins` are defined.
@@ -641,54 +648,137 @@ def rebin(
     if method == 'mean':
         aggregate_func = aggregate_mean
     else:
-        raise NotImplementedError(f'[OPTICAM] Rebinning light curves using method="sum" is not supported yet. We apologise for the inconvenience.')
+        raise ValueError(f'[OPTICAM] Only method="mean" is currently supported.')
     
     if time_bin_size is not None:
-        binned_lcs: BinnedTimeSeries =  aggregate_downsample(
-            time_series=light_curves,
+        return bin_timeseries(
+            ts=TimeSeries(light_curves),
             aggregate_func=aggregate_func,
             time_bin_size=time_bin_size,
-            )
-        new_lcs = convert_binned_timeseries_to_timeseries(binned_lc=binned_lcs)
+        )
     elif nbins is not None:
-        # if binning a light curve into a specified number of bins, convert the light curve to a Table to prevent time
-        # column issues
-        lc_table = Table(light_curves)
-        lc_table['bin'] = np.floor(lc_table['time'] * nbins).astype(int)
-        new_lcs = lc_table.group_by('bin').groups.aggregate(aggregate_func)
-        new_lcs.remove_column('bin')
+        return bin_table(
+            tbl=Table(light_curves),
+            aggregate_func=aggregate_func,
+            nbins=nbins,
+            )
     else:
         raise ValueError('[OPTICAM] Cannot rebin a light curve unless time_bin_size or nbins is defined.')
-    
-    return new_lcs
 
 
-def convert_binned_timeseries_to_timeseries(
-    binned_lc: BinnedTimeSeries,
+def bin_timeseries(
+    ts: TimeSeries,
+    aggregate_func: Callable,
+    time_bin_size: Quantity,
     ) -> TimeSeries:
     """
-    Convert an `astropy.timeseries.BinnedTimeSeries` into an `astropy.timeseries.TimeSeries`.
+    Bin an `astropy.timeseries.TimeSeries`. The resulting `astropy.timeseries.BinnedTimeSeries` is converted into an
+    `astropy.timeseries.TimeSeries` using the time bin centers as the new times. This allows for gaps to be removed
+    from the time series instead of being padded with zeros.
     
     Parameters
     ----------
-    binned_lc : BinnedTimeSeries
-        The binned light curve.
+    ts : TimeSeries
+        The time series.
+    aggregate_func : Callable
+        The aggregate function - should propagate error columns correctly.
+    time_bin_size : Quantity
+        The time bin size.
     
     Returns
     -------
     TimeSeries
-        The binned light curve as an `astropy.timeseries.TimeSeries`.
+        The binned time series.
     """
     
-    # time values of new TimeSeries are in the middle of the bins
-    new_lc = TimeSeries(
-        time=binned_lc['time_bin_start'] + binned_lc['time_bin_size'] / 2,
-        )
-    for col in binned_lc.colnames:
-        if col not in ['time_bin_start', 'time_bin_end', 'time_bin_size']:
-            new_lc.add_column(binned_lc[col], name=col)
+    gtis = infer_gtis(ts.time)  # GTIs are time-aware
     
-    return new_lc
+    binned_ts: BinnedTimeSeries =  aggregate_downsample(
+        time_series=ts,
+        time_bin_size=time_bin_size,
+        aggregate_func=aggregate_func,
+        )
+    
+    return convert_binned_timeseries_to_timeseries(binned_ts=binned_ts, gtis=gtis)
+
+
+def bin_table(
+    tbl: Table,
+    aggregate_func: Callable,
+    nbins: int,
+    ) -> Table:
+    """
+    Bin an `astropy.table.Table` into a specified number of bins.
+    
+    Parameters
+    ----------
+    tbl : Table
+        The table.
+    aggregate_func : Callable
+        The aggregate function - should propagate error columns correctly.
+    nbins : int
+        The number of bins.
+    
+    Returns
+    -------
+    Table
+        The binned table.
+    """
+    
+    tbl['bin'] = np.floor(tbl['time'] * nbins).astype(int)  # get bin numbers
+    new_tbl = tbl.group_by('bin').groups.aggregate(aggregate_func)  # aggregate bins
+    new_tbl.remove_column('bin')  # remove bin numbers
+    
+    return new_tbl
+
+
+def convert_binned_timeseries_to_timeseries(
+    binned_ts: BinnedTimeSeries,
+    gtis: Quantity,
+    ) -> TimeSeries:
+    """
+    Convert an `astropy.timeseries.BinnedTimeSeries` into an `astropy.timeseries.TimeSeries` and apply the "Good Time
+    Intervals".
+    
+    Parameters
+    ----------
+    binned_lc : BinnedTimeSeries
+        The binned time series.
+    gtis : Quantity
+        The "Good Time Intervals" of the time series. Used to mask gaps.
+    
+    Returns
+    -------
+    TimeSeries
+        The binned time series as an `astropy.timeseries.TimeSeries`.
+    """
+    
+    new_ts = TimeSeries()
+    
+    # get names of all non-time columns
+    columns = binned_ts.colnames
+    ignored_columns = ['time_bin_start', 'time_bin_end', 'time_bin_size', 'time_bin_center']
+    columns = [col for col in columns if col not in ignored_columns]
+    
+    for row in binned_ts:
+        # convert row to a QTable to remove requirement for time columns
+        row_copy = QTable(row)
+        
+        # get bin start and end times
+        t_start = row_copy['time_bin_start']
+        t_stop = row_copy['time_bin_start'] + row_copy['time_bin_size']
+        
+        # check if the bin falls within any of the GTIs
+        valid = any([(t_start > gti[0]) & (t_stop < gti[1]) for gti in gtis])
+        if valid:
+            # create new row and add it to our new time series
+            row_tbl = TimeSeries(time=row_copy['time_bin_start'] + row_copy['time_bin_size'] / 2)
+            for col in columns:
+                row_tbl.add_column(row_copy[col], name=col)
+            
+            new_ts = vstack([new_ts, row_tbl])
+    
+    return new_ts
 
 
 def aggregate_mean(
@@ -709,16 +799,18 @@ def aggregate_mean(
         The aggregated column values.
     """
     
-    if 'err' in str(col.name):
-        valid = np.isfinite(col)
+    vals = col.copy()
+    valid = np.isfinite(vals)
+    
+    if 'err' in str(vals.name):
         n = valid.sum()
         
         if n == 0:
             return np.nan
         else:
-            return np.sqrt((col[valid]**2).sum()) / n
+            return np.sqrt((vals[valid]**2).sum()) / n
     else:
-        return np.nanmean(col)
+        return np.mean(vals[valid])
 
 
 def tidy_light_curves(
@@ -744,7 +836,7 @@ def tidy_light_curves(
 def validate_light_curves(
     light_curves: TimeSeries | None,
     norm: Literal['max', 'mean', 'none'],
-    keys: List[str],
+    keys: list[str],
     ) -> TimeSeries:
     """
     Validate light curves. This ensures light curves are normalised and groups redundant rows.
@@ -755,7 +847,7 @@ def validate_light_curves(
         The light curves.
     norm : Literal[&#39;max&#39;, &#39;mean&#39;, &#39;none&#39;]
         The normalisation.
-    keys : List[str]
+    keys : list[str]
         The light curve keys.
     
     Returns
