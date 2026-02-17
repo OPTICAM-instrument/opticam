@@ -33,6 +33,7 @@ from opticam.utils.batching import get_batches, get_batch_size
 from opticam.utils.constants import bar_format
 from opticam.utils.data_checks import scan_data
 from opticam.utils.fits_handlers import get_data, get_stacked_images, save_stacked_images
+from opticam.utils.helpers import delete_keys_from_nested_dict
 from opticam.utils.logging import configure_logger, log_psf_params, recursive_log
 
 
@@ -330,25 +331,19 @@ class Reducer:
         
         params.update({'keys': list(self.camera_files.keys())})
         
-        # remove some parameters that are either already saved elsewhere or are not relevant
-        params.pop('logger')
-        params.pop('bmjds')
-        params.pop('camera_files')
-        
-        try:
-            params.pop('transforms')
-        except KeyError:
-            pass
-        
-        try:
-            params.pop('unaligned_files')
-        except KeyError:
-            pass
-        
-        try:
-            params.pop('catalogs')
-        except KeyError:
-            pass
+        keys_to_remove: set[str] = {
+            'bmjds',  # logged separately
+            'catalogs',  # logged separately
+            'logger',  # logged separately
+            'master_images',  # unnecessary
+            'master_variances',  # unnecessary
+            'number_of_processors',  # unnecessary
+            'passed_checks',  # unnecessary
+            'transforms',  # logged separately
+            'unaligned_files',  # logged separately
+            'verbose',  # unnecessary
+            }
+        delete_keys_from_nested_dict(d=params, keys=keys_to_remove)
         
         # sort parameters
         params = dict(sorted(params.items()))

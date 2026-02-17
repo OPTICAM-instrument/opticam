@@ -86,6 +86,30 @@ def sort_filters(
     return sorted(filters, key=lambda x: filter_order[x.split(':')[-1]])
 
 
+def delete_keys_from_nested_dict(
+    d: dict[str, Any],
+    keys: set[str],
+    ) -> None:
+    """
+    Delete keys from a dictionary in-place.
+    
+    Parameters
+    ----------
+    d : dict[str, Any]
+        The dictionary. May contain nested dictionaries.
+    keys : set[str]
+        The keys to remove from the dictionary.
+    """
+    
+    d_copy = d.copy()
+    
+    for key in d_copy.keys():
+        if key in keys:
+            d.pop(key)
+        elif isinstance(d_copy[key], dict):
+            delete_keys_from_nested_dict(d[key], keys)
+
+
 def propagate_errors(
     data: NDArray,
     bias_var: float | NDArray[np.float64],
@@ -214,3 +238,6 @@ def save_figure(
         bbox_inches='tight',
         )
     print(f'[OPTICAM] Plot saved to {Path(path).resolve()}.')
+
+
+

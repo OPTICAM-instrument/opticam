@@ -93,7 +93,7 @@ def log_file(
             )
 
 
-def recursive_log(param: Any, depth: int = 0, max_depth: int = 5) -> Any:
+def recursive_log(param: Any, depth: int = 0, max_depth: int = 6) -> Any:
     """
     Recursively log parameters.
     
@@ -104,7 +104,7 @@ def recursive_log(param: Any, depth: int = 0, max_depth: int = 5) -> Any:
     depth : int, optional
         The parameter depth, by default 0.
     max_depth : int, optional
-        The maximum parameter depth, by default 5. This prevents infinite recursion.
+        The maximum parameter depth, by default 6. This prevents infinite recursion.
     
     Returns
     -------
