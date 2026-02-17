@@ -152,6 +152,7 @@ class Analyzer:
                 method=method,
                 light_curves=lc,
                 time_bin_size=time_bin_size,
+                time_bin_start=self.t_ref,
                 )
             
             binned_lcs = vstack([binned_lcs, binned_lc])
@@ -614,6 +615,7 @@ def rebin(
     method: Literal['mean'],
     light_curves: Table | TimeSeries | QTable,
     time_bin_size: Quantity | None = None,
+    time_bin_start: Time | None = None,
     nbins: int | None = None,
     ) -> Table | TimeSeries | QTable:
     """
@@ -626,8 +628,9 @@ def rebin(
     light_curves : Table | TimeSeries | QTable
         The light curves being rebinned.
     time_bin_size : Quantity | None, optional
-        The time resolution of the binned light curve, by default `None`. If a value it passed, it must have units of
-        time.
+        The time resolution of the binned light curve, by default `None`.
+    time_bin_start : Time | None
+        The time bin start (useful for ensuring simultaneity between binned time series), by default `None`.
     nbins : int | None, optional
         The desired number of light curve bins, by default `None`. This parameter does nothing if `time_bin_size` is
         defined.
@@ -655,6 +658,7 @@ def rebin(
             ts=TimeSeries(light_curves),
             aggregate_func=aggregate_func,
             time_bin_size=time_bin_size,
+            time_bin_start=time_bin_start,
         )
     elif nbins is not None:
         return bin_table(
@@ -670,6 +674,7 @@ def bin_timeseries(
     ts: TimeSeries,
     aggregate_func: Callable,
     time_bin_size: Quantity,
+    time_bin_start: Time | None,
     ) -> TimeSeries:
     """
     Bin an `astropy.timeseries.TimeSeries`. The resulting `astropy.timeseries.BinnedTimeSeries` is converted into an
@@ -684,6 +689,8 @@ def bin_timeseries(
         The aggregate function - should propagate error columns correctly.
     time_bin_size : Quantity
         The time bin size.
+    time_bin_start : Time | None
+        The time bin start - useful for ensuring simultaneity between binned time series.
     
     Returns
     -------
@@ -695,6 +702,7 @@ def bin_timeseries(
     
     binned_ts: BinnedTimeSeries =  aggregate_downsample(
         time_series=ts,
+        time_bin_start=time_bin_start,
         time_bin_size=time_bin_size,
         aggregate_func=aggregate_func,
         )
