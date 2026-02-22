@@ -686,7 +686,7 @@ class OPTICAM_MX(Instrument):
             return '1'
         elif fltr in ["r", "r'"]:
             return '2'
-        elif fltr in ["i", "z'"]:
+        elif fltr in ["i", "i'", "z", "z'"]:
             return '3'
         
         return 'None'
