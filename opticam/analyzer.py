@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 from stingray import Lightcurve
 
 
+from opticam.plotting.helpers import scale_ax
 from opticam.plotting.plots import plot_light_curves
 from opticam.timing.timeseries import get_lc, infer_gtis
 from opticam.utils.helpers import sort_filters
@@ -59,21 +60,22 @@ class Analyzer:
             Whether to render and show plots, by default `True`.
         """
         
-        if light_curves:
+        self.norm = norm
+        
+        if light_curves is not None:
             lc_cols = light_curves.colnames
             filter_cols: list[str] = [col for col in lc_cols if '_rel_flux_err' in col]
             keys = [col.replace('_rel_flux_err', '') for col in filter_cols]
-            self.keys = sort_filters(list(set(keys)))
-        else:
-            self.keys = []
-        
-        self.norm = norm
-        self.light_curves = validate_light_curves(
+            self.keys = sorted(keys)
+            
+            self.light_curves = validate_light_curves(
             light_curves,
             norm=self.norm,
             keys=self.keys,
             )
-        self.t_ref = self.light_curves['time'].min()
+            self.t_ref = self.light_curves['time'].min()
+        else:
+            self.keys = []
         
         self.out_directory = Path(out_directory)
         if not self.out_directory.is_dir():
@@ -107,9 +109,12 @@ class Analyzer:
             A new `Analyzer` instance with the combined light curves.
         """
         
-        assert analyzer.light_curves, f'[OPTICAM] cannot join an empty analyzer.'
+        assert analyzer.light_curves is not None, f'[OPTICAM] cannot join an empty analyzer.'
         
-        new_light_curves = vstack([self.light_curves, analyzer.light_curves])
+        if hasattr(self, 'light_curves'):
+            new_light_curves = vstack([self.light_curves, analyzer.light_curves])
+        else:
+            new_light_curves = analyzer.light_curves
         
         return Analyzer(
             out_directory=self.out_directory,
@@ -128,7 +133,7 @@ class Analyzer:
         ) -> 'Analyzer':
         """
         Rebin the light curves, propagating errors accordingly. Returns a new `Analyzer` instance containing the binned
-        light curves.
+        light curves. Rebinning uses a common reference time to ensure simultaneity between multiple light curves.
         
         Parameters
         ----------
@@ -233,6 +238,148 @@ class Analyzer:
             plt.close(fig)
 
 
+    def fold(
+        self,
+        period: Quantity,
+        epoch_time: Time | None = None,
+        nbins: int | None = None,
+        sharey: bool = False,
+        save: bool = True,
+        return_fig: bool = False,
+        ) -> Table | tuple[Table, Figure]:
+        """
+        Fold the light curves on the given period.
+        
+        Parameters
+        ----------
+        period : Quantity
+            The period used to fold the light curves. Must have units of time.
+        epoch_time : Time | None, optional
+            The reference time that defines zero phase, by default `None`. If `None`, the first time light curve time
+            value is used.
+        nbins : int | None, optional
+            Bin the folded light curve into this many bins, by default `None`. If `None`, no binning is performed.
+        sharey : bool, optional
+            Whether to share y axes, by default `False`.
+        save : bool, optional
+            Whether to save the figure, by default `True`.
+        return_fig : bool, optional
+            Whether to return the figure, by default `False`. Useful if you want to edit the figure before saving.
+        
+        Returns
+        -------
+        Table | tuple[Table, Figure]
+            If `return_fig=True`, the folded light curve and resulting figure are returned. Otherwise, just the folded
+            time series is returned. The folded light curve is converted from a `TimeSeries` to a `Table` since the
+            `fold()` method of `TimeSeries` replaces the time column with phase values, causing time formatting errors.
+        """
+        
+        phase_bin = isinstance(nbins, int)
+        
+        nrows: int = len(self.keys)
+        
+        fig, axes = plt.subplots(
+            nrows=nrows,
+            sharex=True,
+            sharey=sharey,
+            gridspec_kw={
+                'hspace': 0,
+                },
+            figsize=(6.4, nrows * .5 * 4.8),
+            tight_layout=True,
+            )
+        
+        if nrows == 1:
+            axes = [axes]
+        
+        if epoch_time is None:
+            epoch_time = self.t_ref
+        
+        folded_lcs = Table()
+        
+        for i, key in enumerate(self.keys):
+            lc = self.get_lc(key=key)
+            folded_lc = Table(lc.fold(
+                period=period,
+                epoch_time=epoch_time - (period / 2),  # shift epoch time by half a period to account for 0.5 phase offset
+                normalize_phase=True,
+                ))
+            
+            if phase_bin:
+                folded_lc = rebin(
+                    method='mean',
+                    light_curves=folded_lc,
+                    nbins=nbins,
+                    )
+            
+            folded_lc.rename_column(name='time', new_name='phase')
+            folded_lcs = vstack([folded_lcs, folded_lc])
+            
+            # plot two periods for clarity
+            phase = np.append(0.5 + folded_lc['phase'].value, 1.5 + folded_lc['phase'].value)
+            flux = np.append(folded_lc[f'{key}_rel_flux'].value, folded_lc[f'{key}_rel_flux'].value)
+            flux_err = np.abs(np.append(folded_lc[f'{key}_rel_flux_err'].value, folded_lc[f'{key}_rel_flux_err'].value))
+            
+            axes[i].errorbar(
+                phase,
+                flux,
+                flux_err,
+                color='black',
+                linestyle='none',
+                marker='.' if not phase_bin else 'none',
+                ms=2,
+                ecolor='grey',
+                elinewidth=1,
+                )
+            
+            if phase_bin:
+                axes[i].step(
+                phase,
+                flux,
+                where='mid',
+                color='k',
+                lw=1,
+                )
+            
+            axes[i].plot(
+                [],
+                [],
+                marker='none',
+                linestyle='none',
+                label=key,
+            )
+            
+            leg = axes[i].legend(
+                handlelength=0,
+                fontsize='x-large',
+                frameon=False,
+                )
+            for handle in leg.legend_handles:
+                handle.set_visible(False)
+        
+        axes[-1].set_xlabel('Phase')
+        axes[nrows // 2].set_ylabel('Normalized flux')
+        
+        if save:
+            save_figure(
+                fig=fig,
+                path=self.out_directory.joinpath(f'plots/{self.prefix}_folded_P={period}.pdf'),
+                )
+        
+        if self.show_plots:
+            plt.show()
+        
+        folded_lcs = folded_lcs.group_by('phase').groups.aggregate(np.nanmax)
+        
+        if not return_fig:
+            fig.clear()
+            plt.close(fig)
+            
+            return folded_lcs
+        else:
+            return folded_lcs, fig
+
+
     def lomb_scargle(
         self,
         frequency: Quantity | None = None,
@@ -280,8 +427,7 @@ class Analyzer:
         lsps: dict[str, LombScargle] = {}
         
         for i, key in enumerate(self.keys):
-            
-            lc = get_lc(self.light_curves, key=key)
+            lc = self.get_lc(key=key)
             
             t = lc.time
             dt = np.min(np.diff(t))
@@ -306,6 +452,7 @@ class Analyzer:
                 power,
                 c='k',
                 lw=1,
+                where='mid',
                 )
             
             axes[i].plot(
@@ -381,7 +528,7 @@ class Analyzer:
         minimum_frequency = np.inf
         maximum_frequency = 0
         for key in self.keys:
-            lc = get_lc(self.light_curves, key=key)
+            lc = self.get_lc(key=key)
             lo = 1 / (lc.time.max() - lc.time.min())
             hi = .5 / np.min(np.diff(lc.time))
             if lo < minimum_frequency:
@@ -415,6 +562,7 @@ class Analyzer:
             power,
             lw=1,
             c='k',
+            where='mid',
             )
         
         scale_ax(ax, scale)
@@ -439,149 +587,6 @@ class Analyzer:
             return lsp, fig
 
 
-    def fold(
-        self,
-        period: Quantity,
-        epoch_time: Time | None = None,
-        nbins: int | None = None,
-        sharey: bool = False,
-        save: bool = True,
-        return_fig: bool = False,
-        ) -> Table | tuple[Table, Figure]:
-        """
-        Fold the light curves on the given period.
-        
-        Parameters
-        ----------
-        period : Quantity
-            The period used to fold the light curves. Must have units of time.
-        epoch_time : Time | None, optional
-            The reference time that defines zero phase, by default `None`. If `None`, the first time light curve time
-            value is used.
-        nbins : int | None, optional
-            Bin the folded light curve into this many bins, by default `None`. If `None`, no binning is performed.
-        sharey : bool, optional
-            Whether to share y axes, by default `False`.
-        save : bool, optional
-            Whether to save the figure, by default `True`.
-        return_fig : bool, optional
-            Whether to return the figure, by default `False`. Useful if you want to edit the figure before saving.
-        
-        Returns
-        -------
-        Table | tuple[Table, Figure]
-            If `return_fig=True`, the folded light curve and resulting figure are returned. Otherwise, just the folded
-            time series is returned. The folded light curve is converted from a `TimeSeries` to a `Table` since the
-            `fold()` method of `TimeSeries` replaces the time column with phase values, causing time formatting errors.
-        """
-        
-        phase_bin = isinstance(nbins, int)
-        
-        nrows: int = len(self.keys)
-        
-        fig, axes = plt.subplots(
-            nrows=nrows,
-            sharex=True,
-            sharey=sharey,
-            gridspec_kw={
-                'hspace': 0,
-                },
-            figsize=(6.4, nrows * .5 * 4.8),
-            tight_layout=True,
-            )
-        
-        if nrows == 1:
-            axes = [axes]
-        
-        if epoch_time is None:
-            epoch_time = self.t_ref
-        
-        folded_lcs = Table()
-        
-        for i, key in enumerate(self.keys):
-            
-            lc = get_lc(self.light_curves, key=key)
-            folded_lc = Table(lc.fold(
-                period=period,
-                epoch_time=epoch_time - (period / 2),  # shift epoch time by half a period to account for 0.5 phase offset
-                normalize_phase=True,
-                ))
-            
-            if phase_bin:
-                folded_lc = rebin(
-                    method='mean',
-                    light_curves=folded_lc,
-                    nbins=nbins,
-                    )
-            
-            folded_lc.rename_column(name='time', new_name='phase')
-            folded_lcs = vstack([folded_lcs, folded_lc])
-            
-            # plot two periods for clarity
-            phase = np.append(0.5 + folded_lc['phase'].value, 1.5 + folded_lc['phase'].value)
-            flux = np.append(folded_lc[f'{key}_rel_flux'].value, folded_lc[f'{key}_rel_flux'].value)
-            flux_err = np.append(folded_lc[f'{key}_rel_flux_err'].value, folded_lc[f'{key}_rel_flux_err'].value)
-            
-            axes[i].errorbar(
-                phase,
-                flux,
-                flux_err,
-                color='black',
-                linestyle='none',
-                marker='.' if not phase_bin else 'none',
-                ms=2,
-                ecolor='grey',
-                elinewidth=1,
-                )
-            
-            if phase_bin:
-                axes[i].step(
-                phase,
-                flux,
-                where='mid',
-                color='k',
-                lw=1,
-                )
-            
-            axes[i].plot(
-                [],
-                [],
-                marker='none',
-                linestyle='none',
-                label=key,
-            )
-            
-            leg = axes[i].legend(
-                handlelength=0,
-                fontsize='x-large',
-                frameon=False,
-                )
-            for handle in leg.legend_handles:
-                handle.set_visible(False)
-        
-        axes[-1].set_xlabel('Phase')
-        axes[nrows // 2].set_ylabel('Normalized flux')
-        
-        if save:
-            save_figure(
-                fig=fig,
-                path=self.out_directory.joinpath(f'plots/{self.prefix}_folded_P={period}.pdf'),
-                )
-        
-        if self.show_plots:
-            plt.show()
-        
-        folded_lcs = folded_lcs.group_by('phase').groups.aggregate(np.nanmax)
-        
-        if not return_fig:
-            fig.clear()
-            plt.close(fig)
-            
-            return folded_lcs
-        else:
-            return folded_lcs, fig
-
-
     def export_light_curves_to_stingray(self) -> dict[str, Lightcurve]:
         """
         Export the light curves from an `astropy.timeseries.TimeSeries` table to a dictionary of `stingray.Lightcurve`
@@ -596,10 +601,7 @@ class Analyzer:
         lcs: dict[str, Lightcurve] = {}
         
         for key in self.keys:
-            lc = get_lc(
-                light_curves=self.light_curves,
-                key=key,
-                )
+            lc = self.get_lc(key=key)
             lcs[key] = convert_lc_to_stingray(
                 lc=lc,
                 key=key,
@@ -816,7 +818,7 @@ def aggregate_mean(
         if n == 0:
             return np.nan
         else:
-            return np.sqrt((vals[valid]**2).sum()) / n
+            return np.sqrt(np.sum(vals[valid]**2)) / n
     else:
         return np.mean(vals[valid])
 
@@ -877,7 +879,7 @@ def validate_light_curves(
             # apply normalisation
             factor = get_norm_factor(norm, lc[f'{key}_rel_flux'].value)
             lc[f'{key}_rel_flux'] /= factor
-            lc[f'{key}_rel_flux_err'] /= factor
+            lc[f'{key}_rel_flux_err'] = np.abs(lc[f'{key}_rel_flux_err'] / factor)
             
             validated_light_curves = vstack([validated_light_curves, lc])
     
@@ -913,29 +915,6 @@ def get_norm_factor(
         return float(np.nanmean(fluxes))
     else:
         raise ValueError(f'[OPTICAM] norm={norm} is not supported.')
-
-
-def scale_ax(
-    ax: Axes,
-    scale: Literal['linear', 'semilogx', 'semilogy', 'loglog'],
-    ) -> None:
-    """
-    Set the scale(s) of an `Axes` based on `scale`.
-
-    Parameters
-    ----------
-    ax : Axes
-        The axis to be scaled.
-    scale : Literal[&#39;linear&#39;, &#39;semilogx&#39;, &#39;semilogy&#39;, &#39;loglog&#39;]
-        The desired scale.
-    """
-    
-    if scale == 'linear':
-        return
-    if scale == 'semilogx' or scale == 'loglog':
-        ax.set_xscale('log')
-    if scale == 'semilogy' or scale == 'loglog':
-        ax.set_yscale('log')
 
 
 def convert_lc_to_stingray(
