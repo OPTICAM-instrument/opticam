@@ -1,5 +1,4 @@
-from pathlib import Path
-from typing import Callable, Dict, Tuple
+from typing import Callable
 
 
 from astropy.table import QTable
@@ -8,12 +7,13 @@ from numpy.typing import NDArray
 
 
 from opticam.background.global_background import BaseBackground
-from opticam.correctors import DarkNoiseCorrector
+from opticam.correctors import BiasCorrector, DarkNoiseCorrector, FlatFieldCorrector
 from opticam.instruments import Instrument
 from opticam.photometers import AperturePhotometer
 from opticam.utils.constants import counts_to_mag_factor
 from opticam.mef_slice import MEFSlice
 from opticam.utils.fits_handlers import get_data
+from opticam.utils.helpers import camera_and_filter_key
 
 
 
@@ -66,13 +66,13 @@ def get_shot_stderr(
     return counts_to_mag_factor * np.sqrt(N_source) / N_source
 
 
-def get_dark_stderr(
+def get_bias_stderr(
     N_source: float,
     N_pix: float,
-    dark_flux: float,
+    bias_var: float,
     ) -> float:
     """
-    Get the standard error (in magnitudes) of the dark current noise.
+    Get the standard error (in magnitudes) of the bias variance.
     
     Parameters
     ----------
@@ -80,8 +80,36 @@ def get_dark_stderr(
         The total number of source counts.
     N_pix : int
         The number of aperture pixels.
-    dark_flux : Quantity
-        The total number of dark current electrons **per pixel**. 
+    bias_var : Quantity
+        The bias variance.
+    
+    Returns
+    -------
+    float
+        The standard error (in magnitudes) of the bias variance.
+    """
+    
+    N_bias = N_pix * bias_var
+    
+    return counts_to_mag_factor * np.sqrt(N_bias) / N_source
+
+
+def get_dark_stderr(
+    N_source: float,
+    N_pix: float,
+    dark_var: float,
+    ) -> float:
+    """
+    Get the standard error (in magnitudes) of the dark noise variance.
+    
+    Parameters
+    ----------
+    N_source : float
+        The total number of source counts.
+    N_pix : int
+        The number of aperture pixels.
+    dark_var : float
+        The dark noise variance.
     
     Returns
     -------
@@ -89,9 +117,37 @@ def get_dark_stderr(
         The standard error (in magnitudes) of the dark noise.
     """
     
-    N_dark = N_pix * dark_flux
+    N_dark = N_pix * dark_var
     
     return counts_to_mag_factor * np.sqrt(N_dark) / N_source
+
+
+def get_flat_stderr(
+    N_source: float,
+    N_pix: float,
+    flat_var: float,
+    ) -> float:
+    """
+    Get the standard error (in magnitudes) of the flat-field variance.
+    
+    Parameters
+    ----------
+    N_source : float
+        The total number of source counts.
+    N_pix : int
+        The number of aperture pixels.
+    flat_var : float
+        The flat-field variance.
+    
+    Returns
+    -------
+    float
+        The standard error (in magnitudes) of the flat-field variance.
+    """
+    
+    N_flat = N_pix * flat_var
+    
+    return counts_to_mag_factor * np.sqrt(N_flat) / N_source
 
 
 def get_read_stderr(
@@ -126,7 +182,9 @@ def snr(
     N_source: float | NDArray,
     N_pix: float,
     n_sky: float,
-    dark_flux: float,
+    bias_var: float,
+    dark_var: float,
+    flat_var: float,
     read_noise: float,
     ) -> float | NDArray:
     """
@@ -140,8 +198,12 @@ def snr(
         The number of aperture pixels.
     n_sky : float
         The number of sky counts **per pixel**.
-    dark_flux : float
-        The dark current's "flux" contribution per pixel.
+    bias_var : float
+        The bias variance.
+    dark_var : float
+        The dark noise variance.
+    flat_var : float
+        The flat-field variance.
     read_noise : float
         The read noise of the detector in electrons/pixel.
     
@@ -151,14 +213,16 @@ def snr(
         The S/N ratio.
     """
     
-    return N_source / np.sqrt(N_source + N_pix * (n_sky + dark_flux + read_noise**2))
+    return N_source / np.sqrt(N_source + N_pix * (n_sky + bias_var + dark_var + flat_var + read_noise**2))
 
 
 def snr_stderr(
     N_source: float | NDArray,
     N_pix: float,
     n_sky: float,
-    dark_flux: float,
+    bias_var: float,
+    dark_var: float,
+    flat_var: float,
     read_noise: float,
     ) -> float | NDArray:
     """
@@ -173,10 +237,12 @@ def snr_stderr(
         The number of aperture pixels.
     n_sky : float
         The number of sky counts **per pixel**.
-    dark_flux : float
-        The dark current's "flux" contribution **per pixel**.
-    gain: float
-        The detector gain.
+    bias_var : float
+        The bias variance.
+    dark_var : float
+        The dark noise variance.
+    flat_var : float
+        The flat-field variance.
     read_noise : float
         The read noise of the detector in electrons/pixel.
     
@@ -186,7 +252,7 @@ def snr_stderr(
         The standard error (in magnitudes) on the S/N ratio.
     """
     
-    p = N_pix * (n_sky + dark_flux + read_noise**2)
+    p = N_pix * (n_sky + bias_var + dark_var + flat_var + read_noise**2)
     
     return counts_to_mag_factor * np.sqrt(N_source + p) / N_source
 
@@ -195,10 +261,12 @@ def get_noise_params(
     file: MEFSlice,
     catalog: QTable,
     background: BaseBackground | Callable,
-    psf_params: Dict[str, float],
+    psf_params: dict[str, float],
     instrument: Instrument,
-    dark_corrector: DarkNoiseCorrector,
-    ) -> Tuple[NDArray, NDArray, NDArray, float, float, float]:
+    bias_corrector: BiasCorrector | None,
+    dark_corrector: DarkNoiseCorrector | None,
+    flat_corrector: FlatFieldCorrector | None,
+    ) -> tuple[NDArray[np.int64], NDArray[np.float64], NDArray[np.float64], float, float, float, float, float]:
     """
     Get the noise values of a science image.
     
@@ -210,37 +278,61 @@ def get_noise_params(
         The source catalog corresponding to the science image.
     background : BaseBackground | Callable
         The background estimator.
-    psf_params : Dict[str, float]
+    psf_params : dict[str, float]
         The PSF parameters.
     instrument : Instrument
         The instrument.
-    dark_corrector : DarkNoiseCorrector
+    bias_corrector : BiasCorrector | None
+        The bias corrector.
+    dark_corrector : DarkNoiseCorrector | None
         The dark noise corrector.
+    flat_corrector : FlatFieldCorrector | None
+        The flat-field corrector.
     
     Returns
     -------
-    Tuple[NDArray, NDArray, float, float, float]
-        The source IDs, fluxes, flux errors, number of aperture pixels, backgorund counts/pixel, and dark flux.
+    tuple[NDArray, NDArray, float, float, float]
+        The source IDs, fluxes, flux errors, number of aperture pixels, backgorund counts/pixel, bias variance, dark
+        variance, and flat-field variance.
     """
+    
+    header = file.get_header()
+    camera = instrument.get_camera(header=header)
+    fltr = instrument.get_filter(header=header)
+    key = camera_and_filter_key(camera=camera, fltr=fltr)
     
     coords = np.asarray([catalog['xcentroid'], catalog['ycentroid']]).T
     
     img = get_data(
         file=file,
         instrument=instrument,
+        bias_corrector=bias_corrector,
         dark_corrector=dark_corrector,
-        flat_corrector=None,
+        flat_corrector=flat_corrector,
         rebin_factor=1,
         remove_cosmic_rays=False,
         )[0]
     
-    # get (median) dark flux
-    header = file.get_header()
-    fltr = instrument.get_filter(header=header)
-    if fltr in dark_corrector.master_images.keys():
-        dark_var = dark_corrector.master_variances[fltr]
+    # get median bias variance
+    if bias_corrector is not None:
+        bias_var = bias_corrector.master_variances[camera]
     else:
-        dark_var = instrument.get_dark_flux(header=header)
+        bias_var = 0.
+    
+    # get median dark variance
+    if dark_corrector is not None:
+        if camera in dark_corrector.master_images.keys():
+            dark_var = dark_corrector.master_variances[camera]
+        else:
+            dark_var = instrument.get_dark_flux(header=header)
+    else:
+        dark_var = 0.
+    
+    # get median flat-field variance
+    if flat_corrector is not None:
+        flat_var = flat_corrector.master_variances[key]
+    else:
+        flat_var = 0.
     
     # global background
     bkg = background(img)
@@ -253,14 +345,14 @@ def get_noise_params(
     phot = AperturePhotometer()
     phot_results = phot.compute(
         image=img_clean,
-        bias_var=0.,
+        bias_var=bias_var,
         dark_var=dark_var,
-        flat_var=0.,
+        flat_var=flat_var,
         background_rms=np.sqrt(n_sky),
-        source_coords=coords,
+        cat_coords=coords,
         image_coords=coords,
         psf_params=psf_params,
-        read_noise=instrument.read_noise,
+        read_noise=instrument.get_read_noise(file=file),
         )
     
     # get the number of pixels in the aperture
@@ -273,17 +365,19 @@ def get_noise_params(
     # mask unphysical flux values
     mask = fluxes > 1.
     
-    return source_ids[mask], fluxes[mask], flux_errs[mask], N_pix, n_sky, np.median(dark_var)
+    return source_ids[mask], fluxes[mask], flux_errs[mask], N_pix, n_sky, float(np.median(bias_var)), float(np.median(dark_var)), float(np.median(flat_var))
 
 
 def get_snrs(
     file: MEFSlice,
     background: BaseBackground | Callable,
     catalog: QTable,
-    psf_params: Dict[str, float],
+    psf_params: dict[str, float],
     instrument: Instrument,
-    dark_corrector: DarkNoiseCorrector,
-    ) -> Tuple[NDArray, NDArray]:
+    bias_corrector: BiasCorrector | None,
+    dark_corrector: DarkNoiseCorrector | None,
+    flat_corrector: FlatFieldCorrector | None,
+    ) -> tuple[NDArray, NDArray]:
     """
     Get the S/N ratios for the cataloged sources in a science image.
     
@@ -295,26 +389,32 @@ def get_snrs(
         The background estimator.
     catalog : QTable
         The source catalog corresponding to the science image.
-    psf_params : Dict[str, float]
+    psf_params : dict[str, float]
         The PSF parameters.
     instrument : Instrument
         The instrument.
-    dark_corrector : DarkNoiseCorrector
+    bias_corrector : BiasCorrector | None
+        The bias corrector.
+    dark_corrector : DarkNoiseCorrector | None
         The dark noise corrector.
+    flat_corrector : FlatFieldCorrector | None
+        The flat-field corrector.
     
     Returns
     -------
-    Tuple[NDArray, NDArray]
+    tuple[NDArray, NDArray]
         The source IDs and S/N for each source.
     """
     
-    source_ids, fluxes, flux_errs, N_pix, n_sky, dark_flux = get_noise_params(
+    source_ids, fluxes, flux_errs, N_pix, n_sky, bias_var, dark_var, flat_var = get_noise_params(
         file=file,
         catalog=catalog,
         background=background,
         psf_params=psf_params,
         instrument=instrument,
+        bias_corrector=bias_corrector,
         dark_corrector=dark_corrector,
+        flat_corrector=flat_corrector,
     )
     
     return source_ids, np.asarray(
@@ -322,8 +422,10 @@ def get_snrs(
             N_source=fluxes,
             N_pix=N_pix,
             n_sky=n_sky,
-            dark_flux=dark_flux,
-            read_noise=instrument.read_noise,
+            bias_var=bias_var,
+            dark_var=dark_var,
+            flat_var=flat_var,
+            read_noise=instrument.get_read_noise(file=file),
             )
         )
 
@@ -332,10 +434,12 @@ def characterise_noise(
     file: MEFSlice,
     background: BaseBackground | Callable,
     catalog: QTable,
-    psf_params: Dict[str, float],
+    psf_params: dict[str, float],
     instrument: Instrument,
+    bias_corrector: BiasCorrector | None,
     dark_corrector: DarkNoiseCorrector,
-    ) -> Dict[str, NDArray]:
+    flat_corrector: FlatFieldCorrector | None,
+    ) -> dict[str, NDArray]:
     """
     Characterise the expected noise from an image and compare it to the measured noise for a number of cataloged 
     sources.
@@ -348,26 +452,34 @@ def characterise_noise(
         The background estimator.
     catalog : QTable
         The source catalog corresponding to the science image.
-    psf_params : Dict[str, float]
+    psf_params : dict[str, float]
         The PSF parameters.
     instrument : Instrument
         The instrument.
+    bias_corrector : BiasCorrector
+        The bias corrector.
     dark_corrector : DarkNoiseCorrector
         The dark noise corrector.
+    flat_corrector : FlatFieldCorrector
+        The flat-field corrector.
     
     Returns
     -------
-    Dict[str, NDArray]
+    dict[str, NDArray]
         The noies properties.
     """
     
-    source_ids, fluxes, flux_errs, N_pix, n_sky, dark_flux = get_noise_params(
+    read_noise = instrument.get_read_noise(file=file)
+    
+    source_ids, fluxes, flux_errs, N_pix, n_sky, bias_var, dark_var, flat_var = get_noise_params(
         file=file,
         catalog=catalog,
         background=background,
         psf_params=psf_params,
         instrument=instrument,
+        bias_corrector=bias_corrector,
         dark_corrector=dark_corrector,
+        flat_corrector=flat_corrector,
     )
     
     N_source = np.logspace(
@@ -379,15 +491,33 @@ def characterise_noise(
     results = {}
     
     results['model_mags'] = -2.5 * np.log10(N_source)
-    results['effective_noise'] = snr_stderr(N_source, N_pix, n_sky, dark_flux, read_noise=instrument.read_noise)
+    results['effective_noise'] = snr_stderr(
+        N_source=N_source,
+        N_pix=N_pix,
+        n_sky=n_sky,
+        bias_var=bias_var,
+        dark_var=dark_var,
+        flat_var=flat_var,
+        read_noise=read_noise,
+        )
     results['sky_noise'] = get_sky_stderr(N_source, N_pix, n_sky)
     results['shot_noise'] = get_shot_stderr(N_source)
-    results['dark_noise'] = get_dark_stderr(N_source, N_pix, dark_flux)
-    results['read_noise'] = get_read_stderr(N_source, N_pix, read_noise=instrument.read_noise)
+    results['bias'] = get_bias_stderr(N_source, N_pix, bias_var)
+    results['dark_noise'] = get_dark_stderr(N_source, N_pix, dark_var)
+    results['flat'] = get_flat_stderr(N_source, N_pix, flat_var)
+    results['read_noise'] = get_read_stderr(N_source, N_pix, read_noise=read_noise)
     
     results['measured_mags'] = -2.5 * np.log10(fluxes)
     results['measured_noise'] = counts_to_mag_factor * flux_errs / fluxes
-    results['expected_measured_noise'] = snr_stderr(fluxes, N_pix, n_sky, dark_flux, read_noise=instrument.read_noise)
+    results['expected_measured_noise'] = snr_stderr(
+        N_source=fluxes,
+        N_pix=N_pix,
+        n_sky=n_sky,
+        bias_var=bias_var,
+        dark_var=dark_var,
+        flat_var=flat_var,
+        read_noise=read_noise,
+        )
     
     return results
 

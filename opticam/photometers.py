@@ -62,7 +62,7 @@ class BasePhotometer(ABC):
         dark_var: float | NDArray,
         flat_var: float | NDArray,
         background_rms: NDArray | None,
-        source_coords: NDArray,
+        cat_coords: NDArray,
         image_coords: NDArray | None,
         psf_params: Dict[str, float],
         read_noise: float,
@@ -82,7 +82,7 @@ class BasePhotometer(ABC):
             The flat-field correction variance term.
         background_rms : NDArray | None
             The background RMS. May be `None` if `self.local_background_estimator` is defined.
-        source_coords : NDArray
+        cat_coords : NDArray
             The source coordinates in the catalogue.
         image_coords : NDArray | None
             The source coordinates in the image. If `match_sources` is True, this will be used to match sources in the
@@ -105,7 +105,7 @@ class BasePhotometer(ABC):
 
     def get_position(
         self,
-        source_coords: NDArray,
+        cat_coords: NDArray,
         image_coords: NDArray | None,
         source_index: int,
         psf_params: Dict[str, float],
@@ -115,7 +115,7 @@ class BasePhotometer(ABC):
         
         Parameters
         ----------
-        source_coords : NDArray
+        cat_coords : NDArray
             The source coordinates in the catalogue.
         image_coords : NDArray | None
             The source coordinates in the image.
@@ -134,18 +134,18 @@ class BasePhotometer(ABC):
         
         if not self.forced:
             return self.get_closest_source(
-                source_coords,
+                cat_coords,
                 image_coords,
                 source_index,
                 psf_params,
                 )
         else:
-            return source_coords[source_index]
+            return cat_coords[source_index]
 
 
     def get_closest_source(
         self,
-        source_coords: NDArray,
+        cat_coords: NDArray,
         image_coords: NDArray | None,
         source_index: int,
         psf_params: Dict[str, float],
@@ -155,7 +155,7 @@ class BasePhotometer(ABC):
         
         Parameters
         ----------
-        source_coords : NDArray
+        cat_coords : NDArray
             The source coordinates in the catalogue.
         image_coords : NDArray | None
             The source coordinates in the image.
@@ -176,7 +176,7 @@ class BasePhotometer(ABC):
             return None
         
         # get distances between sources and initial position
-        distances = np.sqrt((image_coords[:, 0] - source_coords[source_index][0])**2 + (image_coords[:, 1] - source_coords[source_index][1])**2)
+        distances = np.sqrt((image_coords[:, 0] - cat_coords[source_index][0])**2 + (image_coords[:, 1] - cat_coords[source_index][1])**2)
         
         # if the closest source is further than the specified tolerance
         if np.min(distances) > self.source_matching_tolerance * np.sqrt(psf_params['semimajor_sigma']**2 + psf_params['semiminor_sigma']**2):
@@ -407,7 +407,7 @@ class AperturePhotometer(BasePhotometer):
         dark_var: float | NDArray,
         flat_var: float | NDArray,
         background_rms: NDArray | None,
-        source_coords: NDArray,
+        cat_coords: NDArray,
         image_coords: NDArray | None,
         psf_params: Dict[str, float],
         read_noise: float,
@@ -427,7 +427,7 @@ class AperturePhotometer(BasePhotometer):
             The flat-field correction variance term scaled by the square of the calibrated image.
         background_rms : NDArray | None
             The background RMS. May be `None` if `self.local_background_estimator` is defined.
-        source_coords : NDArray
+        cat_coords : NDArray
             The source coordinates in the catalogue.
         image_coords : NDArray | None
             The source coordinates in the image. If `match_sources` is True, this will be used to match sources in the
@@ -447,11 +447,11 @@ class AperturePhotometer(BasePhotometer):
         
         results = self.define_results_dict()
         
-        for i in range(len(source_coords)):
+        for i in range(len(cat_coords)):
             
             # get position of source depending on whether source matching is enabled or not
             position = self.get_position(
-                source_coords,
+                cat_coords,
                 image_coords,
                 i,
                 psf_params,
@@ -630,7 +630,7 @@ class OptimalPhotometer(BasePhotometer):
         dark_var: float | NDArray[np.float64],
         flat_var: float | NDArray[np.float64],
         background_rms: NDArray | None,
-        source_coords: NDArray,
+        cat_coords: NDArray,
         image_coords: NDArray | None,
         psf_params: Dict[str, float],
         read_noise: float,
@@ -650,7 +650,7 @@ class OptimalPhotometer(BasePhotometer):
             The flat-field correction variance term scaled by the square of the calibrated image.
         background_rms : NDArray | None
             The background RMS. May be `None` if `self.local_background_estimator` is defined.
-        source_coords : NDArray
+        cat_coords : NDArray
             The source coordinates in the catalogue.
         image_coords : NDArray | None
             The source coordinates in the image. If `match_sources` is True, this will be used to match sources in the
@@ -670,10 +670,10 @@ class OptimalPhotometer(BasePhotometer):
         
         results = self.define_results_dict()
         
-        for i in range(len(source_coords)):
+        for i in range(len(cat_coords)):
             
             position = self.get_position(
-                source_coords,
+                cat_coords,
                 image_coords,
                 i,
                 psf_params,
@@ -893,7 +893,6 @@ def get_growth_curve(
     x_centroid: float,
     y_centroid: float,
     r_max: int,
-    read_noise: float,
     ) -> Tuple[NDArray, NDArray]:
     """
     Compute the growth curve for a point in an image.
@@ -908,8 +907,6 @@ def get_growth_curve(
         The y centroid of the point.
     r_max : int
         The maximum radius in pixels.
-    read_noise : float
-        The instrument's read noise.
     
     Returns
     -------
@@ -939,7 +936,7 @@ def get_growth_curve(
             background_rms=0.,
             position=position,
             psf_params={},  # empty dict since not needed
-            read_noise=read_noise,
+            read_noise=0.,
             )[0]
         
         fluxes.append(flux)

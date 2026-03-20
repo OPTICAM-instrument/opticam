@@ -50,6 +50,9 @@ class DefaultFinder:
         tbl = SourceCatalog(data, segment_map).to_table()
         tbl.sort('segment_flux', reverse=True)
         
+        # reset label to label sources in order of flux
+        tbl['label'] = range(1, len(tbl) + 1)
+        
         return tbl
 
 

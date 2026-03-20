@@ -10,8 +10,9 @@ import os.path
 
 from opticam.correctors import BiasCorrector, DarkNoiseCorrector, FlatFieldCorrector
 from opticam.mef_slice import MEFSlice
+from opticam.timing.helpers import apply_barycentric_correction
+from opticam.utils.helpers import camera_and_filter_key
 from opticam.utils.image_helpers import rebin_image
-from opticam.utils.time_helpers import apply_barycentric_correction
 from opticam.instruments import Instrument
 
 
@@ -21,7 +22,7 @@ def get_header_info(
     file: MEFSlice,
     instrument: Instrument,
     barycenter: bool,
-    ) -> tuple[float, float, str, str]:
+    ) -> tuple[float, float, str, str, str]:
     """
     Get the timestamp, exposure length, filter, and binning of the file.
     
@@ -36,12 +37,13 @@ def get_header_info(
     
     Returns
     -------
-    Tuple[float | None, float | None, str | None, str | None, float | None]
-        The timestamp, exposure length, filter, and binning of the image.
+    Tuple[float, float, str, str, str, float]
+        The timestamp, exposure length, camera, filter, and binning of the image.
     """
     
     header = file.get_header()
     exposure = float(header[instrument.exptime_kw])
+    camera = instrument.get_camera(header=header)
     fltr = instrument.get_filter(header=header)
     binning = instrument.get_binning(header=header)
     timestamp = instrument.get_mjd(header=header)
@@ -54,7 +56,7 @@ def get_header_info(
             instrument=instrument,
             ))
     
-    return timestamp, exposure, fltr, binning
+    return timestamp, exposure, camera, fltr, binning
 
 
 def get_data(
@@ -99,14 +101,16 @@ def get_data(
     """
     
     data, header = file.get_data_and_header()
+    camera = instrument.get_camera(header=header)
     fltr = instrument.get_filter(header=header)
+    key = camera_and_filter_key(camera, fltr)
     
     ################################################# bias correction #################################################
     
     if bias_corrector is not None:
         data, bias_var = bias_corrector.correct(
             image=data,
-            fltr=fltr,
+            camera=instrument.get_camera(header=header),
             )
     else:
         bias_var = 0.
@@ -116,7 +120,7 @@ def get_data(
     if dark_corrector is not None:
         data, dark_var = dark_corrector.correct(
             image=data,
-            fltr=fltr,
+            key=key,
             dark_flux=instrument.get_dark_flux(header=header),
             )
     else:
@@ -127,7 +131,7 @@ def get_data(
     if flat_corrector is not None:
         data, flat_var = flat_corrector.correct(
             image=data,
-            fltr=fltr,
+            key=key,
             )
     else:
         flat_var = 0.

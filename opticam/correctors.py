@@ -9,6 +9,7 @@ from numpy.typing import NDArray
 
 from opticam.instruments import Instrument, OPTICAM_MX
 from opticam.mef_slice import create_file_paths, MEFSlice
+from opticam.utils.helpers import camera_and_filter_key, camera_key
 from opticam.utils.image_helpers import rebin_image
 from opticam.utils.logging import log_file
 
@@ -61,6 +62,7 @@ class Corrector(ABC):
         # get the calibration image files
         if data_directory is not None:
             raw_data_files = create_file_paths(data_directory=Path(data_directory))
+            assert len(raw_data_files) > 0, f'[OPTICAM] No FITS files found in {Path(data_directory).resolve()}.'
             self.data_files = self._validate_data(raw_data_files)
         else:
             self.data_files = None
@@ -92,7 +94,6 @@ class Corrector(ABC):
     def correct(
         self,
         image: NDArray[np.float64],
-        fltr: str,
         *args,
         **kwargs,
         ) -> tuple[NDArray[np.float64], float | NDArray[np.float64]]:
@@ -103,8 +104,6 @@ class Corrector(ABC):
         ----------
         image : NDArray[np.float64]
             The image.
-        fltr : str
-            The image filter.
         
         Returns
         -------
@@ -161,7 +160,7 @@ class Corrector(ABC):
     @abstractmethod
     def run_checks(
         self,
-        data_files_by_filter: dict[str, list[MEFSlice]],
+        data_files_by_key: dict[str, list[MEFSlice]],
         return_errors: bool = False,
         ) -> None | int:
         """
@@ -169,8 +168,8 @@ class Corrector(ABC):
         
         Parameters
         ----------
-        data_files_by_filter : dict[str, list[MEFSlice]]
-            The science image files grouped by filter {filter: [MEFSlice]}.
+        data_files_by_key : dict[str, list[MEFSlice]]
+            The science image files grouped by camera:filter keys.
         return_errors : bool, optional
             Whether to return the number of errors raised, by default `False`.
         
@@ -284,7 +283,7 @@ class BiasCorrector(Corrector):
     def correct(
         self,
         image: NDArray[np.float64],
-        fltr: str,
+        camera: str,
         ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         """
         Subtract the bias from an image.
@@ -293,8 +292,8 @@ class BiasCorrector(Corrector):
         ----------
         image : NDArray[np.float64]
             The image.
-        fltr : str
-            The image filter.
+        camera : str
+            The camera that took the image.
         
         Returns
         -------
@@ -307,13 +306,13 @@ class BiasCorrector(Corrector):
             If no bias images were found with the given filter.
         """
         
-        if fltr not in self.data_files.keys():
-            raise ValueError(f"[OPTICAM] No bias images found for {fltr} filter.")
-        if fltr not in self.master_images.keys() or self.master_images[fltr] is None:
-            print(f'[OPTICAM] {fltr} master bias image not found. Attempting to create.')
+        if camera not in self.data_files.keys():
+            raise ValueError(f"[OPTICAM] No bias images found for {camera} filter.")
+        if camera not in self.master_images.keys() or self.master_images[camera] is None:
+            print(f'[OPTICAM] {camera} master bias image not found. Attempting to create.')
             self.create_master_images()
         
-        return image - self.master_images[fltr], self.master_variances[fltr]
+        return image - self.master_images[camera], self.master_variances[camera]
 
 
     def create_master_images(
@@ -333,13 +332,13 @@ class BiasCorrector(Corrector):
             print(f'[OPTICAM] Master bias file already exists. To overwrite, set overwrite=True.')
             return
         
-        for fltr in self.data_files.keys():
+        for camera in self.data_files.keys():
             
-            if len(self.data_files[fltr]) == 1:
-                raise Exception(f"[OPTICAM] Only one {fltr} bias image found. Master bias images cannot be created from a single image.")
+            if len(self.data_files[camera]) == 1:
+                raise Exception(f"[OPTICAM] Only one {camera} bias image found. Master bias images cannot be created from a single image.")
             
             biases = []
-            for bias_path in self.data_files[fltr]:
+            for bias_path in self.data_files[camera]:
                 bias = bias_path.get_data()
                 
                 if self.rebin_factor > 1:
@@ -348,8 +347,8 @@ class BiasCorrector(Corrector):
                 biases.append(bias)
             
             # use mean since bias frames shouldn't contain outliers like cosmic rays
-            self.master_images[fltr] = np.mean(biases, axis=0)
-            self.master_variances[fltr] = np.var(biases, axis=0, ddof=1) / len(biases)
+            self.master_images[camera] = np.mean(biases, axis=0)
+            self.master_variances[camera] = np.var(biases, axis=0, ddof=1) / len(biases)
         
         print('[OPTICAM] Master bias image(s) created.')
         
@@ -360,7 +359,7 @@ class BiasCorrector(Corrector):
 
     def run_checks(
         self,
-        data_files_by_filter: dict[str, list[MEFSlice]],
+        data_files_by_key: dict[str, list[MEFSlice]],
         return_errors: bool = False,
         ) -> None | int:
         """
@@ -370,8 +369,8 @@ class BiasCorrector(Corrector):
         
         Parameters
         ----------
-        data_files_by_filter : dict[str, list[MEFSlice]
-            The science image `MEFSlice` instances grouped by filter.
+        data_files_by_key : dict[str, list[MEFSlice]
+            The science image files grouped by camera:filter keys.
         return_errors : bool, optional
             Whether to return the number of errors raised, by default `False`.
         
@@ -383,8 +382,12 @@ class BiasCorrector(Corrector):
         
         bias_path = next(iter(self.data_files.values()))[0]  # get the path to a random flat
         bias_header = bias_path.get_header()
-        image_path = next(iter(data_files_by_filter.values()))[0]  # get the path to a science image
+        image_path = next(iter(data_files_by_key.values()))[0]  # get the path to a science image
         science_header = image_path.get_header()
+        
+        science_keys = list(data_files_by_key.keys())
+        science_cameras = [camera_key(science_key) for science_key in science_keys]
+        bias_cameras = list(self.data_files.keys())
         
         errors = 0
         warnings = 0
@@ -392,9 +395,9 @@ class BiasCorrector(Corrector):
         #################################################### errors ####################################################
         
         # check filters match
-        if self.data_files.keys() != data_files_by_filter.keys():
+        if not all([science_camera in bias_cameras for science_camera in science_cameras]):
             errors += 1
-            print(f'[OPTICAM] ERROR: inconsistent filters found between the bias images and the science images. Bias image filters: ({','.join(self.data_files.keys())}); science image filters: ({','.join(data_files_by_filter.keys())})')
+            print(f'[OPTICAM] ERROR: inconsistent cameras found between the bias images and the science images. Bias cameras: ({','.join(bias_cameras)}); science cameras: ({','.join(science_cameras)})')
         
         ################################################### warnings ###################################################
         
@@ -446,26 +449,25 @@ class BiasCorrector(Corrector):
         Returns
         -------
         dict[str, list[MEFSlice]]
-            A dictionary containing the bias image files for each filter.
+            A dictionary containing the bias image files for each camera.
         """
         
-        filters: dict[str, str] = {}
+        cameras: dict[str, str] = {}
         binnings: dict[str, str] = {}
         exptimes: dict[str, float] = {}
         validated_files: dict[str, list[MEFSlice]] = {}
         
         for file in files:
             header = file.get_header()
+            camera = self.instrument.get_camera(header=header)
             
-            fltr = self.instrument.get_filter(header=header)
-            filters[file.key] = fltr
-            
+            cameras[file.key] = camera
             binnings[file.key] = self.instrument.get_binning(header=header)
             exptimes[file.key] = float(header[self.instrument.exptime_kw])
             
-            if fltr not in validated_files.keys():
-                validated_files[fltr] = []
-            validated_files[fltr].append(file)
+            if camera not in validated_files.keys():
+                validated_files[camera] = []
+            validated_files[camera].append(file)
         
         unique_binnings = set(binnings.values())
         if len(unique_binnings) > 1:
@@ -477,8 +479,7 @@ class BiasCorrector(Corrector):
             raise ValueError(f'[OPTICAM] Inconsistent binning detected in the bias images. Image binnings have been logged to {self.out_directory.joinpath('diag/binnings.json')}.')
         
         unique_exptimes = set(exptimes.values())
-        zero_second_exposures = all([exptime == 0.0 for exptime in list(unique_exptimes)])
-        if len(unique_exptimes) > 1 or not zero_second_exposures:
+        if len(unique_exptimes) > 1:
             log_file(
                 out_directory=self.out_directory,
                 file_name='exptimes.json',
@@ -486,11 +487,10 @@ class BiasCorrector(Corrector):
                 )
             raise ValueError(f'[OPTICAM] Invalid exposure times detected in the bias images. Exposure times have been logged to {self.out_directory.joinpath('diag/exptimes.json')}. All bias images should have an exposure time of 0.0 s.')
         
-        for fltr, valid_files in validated_files.items():
-            print(f'[OPTICAM] {len(valid_files)} {fltr} bias images.')
+        for camera, valid_files in validated_files.items():
+            print(f'[OPTICAM] {len(valid_files)} {camera} bias images.')
         
         return validated_files
-
 
 
 
@@ -556,7 +556,9 @@ class DarkNoiseCorrector(Corrector):
     def correct(
         self,
         image: NDArray[np.float64],
-        fltr: str,
+        camera: str | None = None,
+        fltr: str | None = None,
+        key: str | None = None,
         dark_flux: float | None = None,
         ) -> tuple[NDArray[np.float64], float | NDArray[np.float64]]:
         """
@@ -566,6 +568,8 @@ class DarkNoiseCorrector(Corrector):
         ----------
         image : NDArray[np.float64]
             The image.
+        camera : str
+            The camera that took the image.
         fltr : str
             The image filter.
         dark_flux : float | None, optional
@@ -583,14 +587,17 @@ class DarkNoiseCorrector(Corrector):
             If no dark images were found with the given filter.
         """
         
+        if key is None:
+            key = camera_and_filter_key(camera, fltr)
+        
         if dark_flux is None:
-            if fltr not in self.data_files.keys():
-                raise ValueError(f"[OPTICAM] No dark images found for {fltr} filter.")
-            if fltr not in self.master_images.keys() or self.master_images[fltr] is None:
-                print(f'[OPTICAM] {fltr} master dark image not found. Attempting to create.')
+            if key not in self.data_files.keys():
+                raise ValueError(f"[OPTICAM] No dark images found for {key}.")
+            if key not in self.master_images.keys() or self.master_images[key] is None:
+                print(f'[OPTICAM] {key} master dark image not found. Attempting to create.')
                 self.create_master_images()
             
-            return image - self.master_images[fltr], self.master_variances[fltr]
+            return image - self.master_images[key], self.master_variances[key]
         else:
             return image - dark_flux, dark_flux
 
@@ -612,33 +619,32 @@ class DarkNoiseCorrector(Corrector):
             print(f'[OPTICAM] Master darks file already exists. To overwrite existing master darks, set overwrite=True.')
             return
         
-        for fltr in self.data_files.keys():
+        for key in self.data_files.keys():
             
-            if len(self.data_files[fltr]) == 1:
-                raise Exception(f"[OPTICAM] Only one {fltr} dark image found. Master darks cannot be created from a single image.")
+            if len(self.data_files[key]) == 1:
+                raise Exception(f"[OPTICAM] Only one {key} dark image found. Master darks cannot be created from a single image.")
             
             # read darks
             darks = []
-            for dark_file in self.data_files[fltr]:
+            for dark_file in self.data_files[key]:
                 dark = dark_file.get_data()
-                
-                # apply bias correction
-                # TODO: check whether bias should be corrected after rebinning instead?
-                if self.bias_corrector is not None:
-                    dark, bias_var = self.bias_corrector.correct(
-                        image=dark,
-                        fltr=fltr,
-                        )
-                else:
-                    bias_var = 0.
                 
                 if self.rebin_factor > 1:
                     dark = rebin_image(dark, self.rebin_factor)
                 
+                # apply bias correction
+                if self.bias_corrector is not None:
+                    dark, bias_var = self.bias_corrector.correct(
+                        image=dark,
+                        camera=camera_key(key),
+                        )
+                else:
+                    bias_var = 0.
+                
                 darks.append(dark)
             
-            self.master_images[fltr] = np.median(darks, axis=0)
-            self.master_variances[fltr] = np.pi / (2 * len(darks)) * (np.var(darks, axis=0, ddof=1) + bias_var)
+            self.master_images[key] = np.median(darks, axis=0)
+            self.master_variances[key] = np.pi / (2 * len(darks)) * (np.var(darks, axis=0, ddof=1) + bias_var)
         
         print('[OPTICAM] Master dark image(s) created.')
         
@@ -649,7 +655,7 @@ class DarkNoiseCorrector(Corrector):
 
     def run_checks(
         self,
-        data_files_by_filter: dict[str, list[MEFSlice]],
+        data_files_by_key: dict[str, list[MEFSlice]],
         return_errors: bool = False,
         ) -> None | int:
         """
@@ -659,8 +665,8 @@ class DarkNoiseCorrector(Corrector):
         
         Parameters
         ----------
-        data_files_by_filter : dict[str, list[MEFSlice]
-            The science image `MEFSlice` instances grouped by filter.
+        data_files_by_key : dict[str, list[MEFSlice]
+            The science image files grouped by camera:filter keys.
         return_errors : bool, optional
             Whether to return the number of errors raised, by default `False`.
         
@@ -675,7 +681,7 @@ class DarkNoiseCorrector(Corrector):
             dark_file = next(iter(self.data_files.values()))[0]  # path to a random flat
             dark_header = dark_file.get_header()
             dark_binning = self.instrument.get_binning(header=dark_header)
-        image_file = next(iter(data_files_by_filter.values()))[0]  # path to a science image
+        image_file = next(iter(data_files_by_key.values()))[0]  # path to a science image
         science_header = image_file.get_header()
         science_binning = self.instrument.get_binning(header=science_header)
         
@@ -694,14 +700,16 @@ class DarkNoiseCorrector(Corrector):
         
         # check filters match
         if self.data_files is not None:
-            if self.data_files.keys() != data_files_by_filter.keys():
+            if self.data_files.keys() != data_files_by_key.keys():
                 errors += 1
-                print(f'[OPTICAM] ERROR: inconsistent filters found between the dark images and the science images. Dark image filters: ({','.join(self.data_files.keys())}); science image filters: ({','.join(data_files_by_filter.keys())})')
+                print(f'[OPTICAM] ERROR: inconsistent filters found between the dark images and the science images. Dark image filters: ({','.join(self.data_files.keys())}); science image filters: ({','.join(data_files_by_key.keys())})')
         
         if self.data_files is None:
-            if self.instrument.dark_curr_kw not in list(science_header.keys()):
+            try:
+                float(self.instrument.get_dark_flux(header=science_header))
+            except Exception as e:
                 errors += 1
-                print(f'[OPTICAM] ERROR: No dark images passed to DarkCurrentCorrector and the dark current keyword {self.instrument.dark_curr_kw} was not found in the header of the file: {image_file.path} extension {image_file.ext}.')
+                print(f'[OPTICAM] ERROR: No dark images passed to DarkCurrentCorrector and the dark noise could not be inferred from file: {image_file.path} extension {image_file.ext} due to the exception {e} This may be due to an incorrect dark current keyword or the images not including a dark current keyword in their headers. In the latter case, dedicated dark images will be required to quantify the dark noise.')
         
         ################################################### warnings ###################################################
         
@@ -754,7 +762,7 @@ class DarkNoiseCorrector(Corrector):
             A dictionary containing the dark image files for each filter.
         """
         
-        filters: dict[str, str] = {}
+        keys: dict[str, str] = {}
         binnings: dict[str, str] = {}
         exptimes: dict[str, float] = {}
         validated_files: dict[str, list[MEFSlice]] = {}
@@ -763,14 +771,16 @@ class DarkNoiseCorrector(Corrector):
             header = file.get_header()
             
             fltr = self.instrument.get_filter(header=header)
-            filters[file.key] = fltr
+            camera = self.instrument.get_camera(header=header)
+            key = camera_and_filter_key(camera, fltr)
             
+            keys[file.key] = key
             binnings[file.key] = self.instrument.get_binning(header=header)
             exptimes[file.key] = float(header[self.instrument.exptime_kw])
             
-            if fltr not in validated_files.keys():
-                validated_files[fltr] = []
-            validated_files[fltr].append(file)
+            if key not in validated_files.keys():
+                validated_files[key] = []
+            validated_files[key].append(file)
         
         unique_binnings = set(binnings.values())
         
@@ -791,8 +801,8 @@ class DarkNoiseCorrector(Corrector):
                 )
             raise ValueError(f'[OPTICAM] Inconsistent exposure times detected in the dark images. Exposure times have been logged to {self.out_directory.joinpath('diag/exptimes.json')}')
         
-        for fltr, valid_files in validated_files.items():
-            print(f'[OPTICAM] {len(valid_files)} {fltr} dark images.')
+        for key, valid_files in validated_files.items():
+            print(f'[OPTICAM] {len(valid_files)} {key} dark images.')
         
         return validated_files
 
@@ -866,7 +876,9 @@ class FlatFieldCorrector(Corrector):
     def correct(
         self,
         image: NDArray[np.float64],
-        fltr: str,
+        camera: str | None = None,
+        fltr: str | None = None,
+        key: str | None = None,
         ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         """
         Correct an image for flat-fielding.
@@ -875,6 +887,8 @@ class FlatFieldCorrector(Corrector):
         ----------
         image : NDArray[np.float64]
             The image.
+        camera : str
+            The camera that took the image.
         fltr : str
             The image filter.
         
@@ -885,20 +899,20 @@ class FlatFieldCorrector(Corrector):
             image.
         """
         
-        if fltr not in self.data_files.keys():
-            raise ValueError(f"[OPTICAM] Cannot apply flat-field corrections. No flat-field images found for filter: {fltr}.")
+        if key is None:
+            key = camera_and_filter_key(camera, fltr)
         
-        if fltr not in self.master_images.keys():
-            print(f'[OPTICAM] {fltr} master flat-field image not found. Attempting to create.')
-            try:
-                self.create_master_images()
-            except Exception as e:
-                raise Exception(f"[OPTICAM] Could not create master flat-field image(s) due to the following exception: {e}")
+        if key not in self.data_files.keys():
+            raise ValueError(f"[OPTICAM] Cannot apply flat-field corrections. No flat-field images found for {key}.")
         
-        calibrated_image = image / self.master_images[fltr]
+        if key not in self.master_images.keys():
+            print(f'[OPTICAM] {key} master flat-field image not found. Attempting to create.')
+            self.create_master_images()
+        
+        calibrated_image = image / self.master_images[key]
         
         # propagate multiplicative variance
-        var = self.master_variances[fltr] * calibrated_image**2 / self.master_images[fltr]**2
+        var = self.master_variances[key] * calibrated_image**2 / self.master_images[key]**2
         
         # correct image for flat-fielding
         return calibrated_image, var
@@ -924,24 +938,28 @@ class FlatFieldCorrector(Corrector):
             return
         
         if not self.passed_checks:
-            valid, flat_exptime, dark_exptime = self._dark_corrector_is_valid()
-            if not valid:
-                raise ValueError(f'[OPTICAM] inconsistent exposure times between flat-field images and dark images. Flat-field exposure time: {flat_exptime} s; dark exposure time: {dark_exptime} s.')
+            if self.dark_corrector is not None:
+                valid, flat_exptime, dark_exptime = self._dark_corrector_is_valid()
+                if not valid:
+                    raise ValueError(f'[OPTICAM] inconsistent exposure times between flat-field images and dark images. Flat-field exposure time: {flat_exptime} s; dark exposure time: {dark_exptime} s.')
         
-        for fltr in self.data_files.keys():
+        for key in self.data_files.keys():
             
-            if len(self.data_files[fltr]) == 1:
-                raise Exception(f"[OPTICAM] Only one {fltr} flat found. Master flats cannot be created from a single image.")
+            if len(self.data_files[key]) == 1:
+                raise Exception(f"[OPTICAM] Only one {key} flat found. Master flats cannot be created from a single image.")
             
             # read flats
             flats = []
-            for flat_file in self.data_files[fltr]:
+            for flat_file in self.data_files[key]:
                 flat, header = flat_file.get_data_and_header()
+                
+                if self.rebin_factor > 1:
+                    flat = rebin_image(flat, self.rebin_factor)
                 
                 if self.bias_corrector is not None:
                     flat, bias_var = self.bias_corrector.correct(
                         image=flat,
-                        fltr=fltr,
+                        camera=camera_key(key),
                         )
                 else:
                     bias_var = 0.
@@ -949,14 +967,11 @@ class FlatFieldCorrector(Corrector):
                 if self.dark_corrector is not None:
                     flat, dark_var = self.dark_corrector.correct(
                         image=flat,
-                        fltr=fltr,
+                        key=key,
                         dark_flux=self.instrument.get_dark_flux(header=header),
                         )
                 else:
                     dark_var = 0.
-                
-                if self.rebin_factor > 1:
-                    flat = rebin_image(flat, self.rebin_factor)
                 
                 flats.append(flat)
             
@@ -964,8 +979,8 @@ class FlatFieldCorrector(Corrector):
             raw_master_flat = np.median(flats, axis=0)
             norm = np.median(raw_master_flat)
             
-            self.master_images[fltr] = raw_master_flat / norm
-            self.master_variances[fltr] = np.pi / (2 * len(flats)) * (np.var(flats, axis=0, ddof=1) + bias_var + dark_var) / norm**2
+            self.master_images[key] = raw_master_flat / norm
+            self.master_variances[key] = np.pi / (2 * len(flats)) * (np.var(flats, axis=0, ddof=1) + bias_var + dark_var) / norm**2
         
         print('[OPTICAM] Master flat-field image(s) created.')
         
@@ -976,7 +991,7 @@ class FlatFieldCorrector(Corrector):
 
     def run_checks(
         self,
-        data_files_by_filter: dict[str, list[MEFSlice]],
+        data_files_by_key: dict[str, list[MEFSlice]],
         return_errors: bool = False,
         ) -> None | int:
         """
@@ -986,8 +1001,8 @@ class FlatFieldCorrector(Corrector):
         
         Parameters
         ----------
-        data_files_by_filter : dict[str, list[MEFSlice]]
-            The science image filtes grouped by filter.
+        data_files_by_key : dict[str, list[MEFSlice]]
+            The science images grouped by camera:filter keys.
         return_errors : bool, optional
             Whether to return the number of errors raised, by default `False`.
         
@@ -999,23 +1014,28 @@ class FlatFieldCorrector(Corrector):
         
         flat_file = next(iter(self.data_files.values()))[0]  # get the path to a random flat
         flat_header = flat_file.get_header()
-        image_file = next(iter(data_files_by_filter.values()))[0]  # get the path to a science image
+        image_file = next(iter(data_files_by_key.values()))[0]  # get the path to a science image
         image_header = image_file.get_header()
+        
+        science_keys = sorted(list(data_files_by_key.keys()))
+        flat_keys = sorted(list(self.data_files.keys()))
         
         errors = 0
         warnings = 0
         
         #################################################### errors ####################################################
         
-        # check filters match
-        if self.data_files.keys() != data_files_by_filter.keys():
+        # check all science image keys have corresponding flats
+        if not all([science_key in flat_keys for science_key in science_keys]):
             errors += 1
-            print(f'[OPTICAM] ERROR: inconsistent filters found between the flat-field images and the science images. Flat-field image filters: ({','.join(self.data_files.keys())}); science image filters: ({','.join(data_files_by_filter.keys())})')
+            print(f'[OPTICAM] ERROR: inconsistent keys found between the flat-field images and the science images. Flat-field image keys: ({','.join(flat_keys)}); science image keys: ({','.join(science_keys)})')
         
         # if dark noise corrector defined, check dark images have same exposure times as flats
-        valid, flat_exptime, dark_exptime = self._dark_corrector_is_valid()
-        if not valid:
-            print(f'[OPTICAM] ERROR: inconsistent exposure times between flat-field images and dark images. Flat-field exposure time: {flat_exptime} s; dark exposure time: {dark_exptime} s.')
+        if self.dark_corrector is not None:
+            valid, flat_exptime, dark_exptime = self._dark_corrector_is_valid()
+            if not valid:
+                errors += 1
+                print(f'[OPTICAM] ERROR: inconsistent exposure times between flat-field images and dark images. Flat-field exposure time: {flat_exptime} s; dark exposure time: {dark_exptime} s.')
         
         ################################################### warnings ###################################################
         
@@ -1069,7 +1089,7 @@ class FlatFieldCorrector(Corrector):
             A dictionary containing the paths to the flat-field image files grouped by each filter.
         """
         
-        filters: dict[str, str] = {}
+        keys: dict[str, str] = {}
         binnings: dict[str, str] = {}
         exptimes: dict[str, float] = {}
         validated_files: dict[str, list[MEFSlice]] = {}
@@ -1078,14 +1098,16 @@ class FlatFieldCorrector(Corrector):
             header = file.get_header()
             
             fltr = self.instrument.get_filter(header=header)
-            filters[file.key] = fltr
+            camera = self.instrument.get_camera(header=header)
+            key = camera_and_filter_key(camera, fltr)
             
+            keys[file.key] = key
             binnings[file.key] = self.instrument.get_binning(header=header)
             exptimes[file.key] = float(header[self.instrument.exptime_kw])
             
-            if fltr not in validated_files.keys():
-                validated_files[fltr] = []
-            validated_files[fltr].append(file)
+            if key not in validated_files.keys():
+                validated_files[key] = []
+            validated_files[key].append(file)
         
         if len(set(binnings.values())) > 1:
             log_file(
@@ -1103,8 +1125,8 @@ class FlatFieldCorrector(Corrector):
                 )
             raise ValueError(f'[OPTICAM] Inconsistent exposure times detected in the flat-field images. Exposure times have been logged to {self.out_directory.joinpath('diag/exptimes.json')}')
         
-        for fltr, valid_files in validated_files.items():
-            print(f'[OPTICAM] {len(valid_files)} {fltr} flat-field images.')
+        for key, valid_files in validated_files.items():
+            print(f'[OPTICAM] {len(valid_files)} {key} flat-field images.')
         
         return validated_files
 
@@ -1120,8 +1142,7 @@ class FlatFieldCorrector(Corrector):
             dark_exposure_time`.
         """
         
-        if hasattr(self.dark_corrector, 'data_files'):
-            
+        if self.dark_corrector.data_files is not None:
             dark_file = next(iter(self.dark_corrector.data_files.values()))[0]
             dark_header = dark_file.get_header()
             dark_exptime = float(dark_header[self.instrument.exptime_kw])

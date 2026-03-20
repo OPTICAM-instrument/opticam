@@ -1,10 +1,11 @@
-from typing import Any, Dict, List
+from pathlib import Path
 import re
+from typing import Any, Dict, List
 
 
-from astropy.timeseries import TimeSeries
 import numpy as np
 from numpy.typing import NDArray
+from matplotlib.figure import Figure
 
 
 from opticam.utils.constants import filter_order
@@ -51,11 +52,12 @@ def sort_dict_by_filters(
     """
     
     for key in d.keys():
-        if key not in filter_order.keys():
+        fltr = filter_key(key)
+        if fltr not in filter_order.keys():
             # unrecognised filter; cannot sort
             return d
     
-    return dict(sorted(d.items(), key=lambda x: filter_order[x[0]]))
+    return dict(sorted(d.items(), key=lambda x: filter_order[filter_key(x[0])]))
 
 
 def sort_filters(
@@ -81,7 +83,62 @@ def sort_filters(
             # unrecognised filter; cannot sort
             return filters
     
-    return sorted(filters, key=lambda x: filter_order[x[0]])
+    return sorted(filters, key=lambda x: filter_order[x.split(':')[-1]])
+
+
+def delete_keys_from_nested_dict(
+    d: dict[str, Any],
+    keys: set[str],
+    ) -> None:
+    """
+    Delete keys from a dictionary in-place.
+    
+    Parameters
+    ----------
+    d : dict[str, Any]
+        The dictionary. May contain nested dictionaries.
+    keys : set[str]
+        The keys to remove from the dictionary.
+    """
+    
+    d_copy = d.copy()
+    
+    for key in d_copy.keys():
+        if key in keys:
+            d.pop(key)
+        elif isinstance(d_copy[key], dict):
+            delete_keys_from_nested_dict(d[key], keys)
+
+
+def match_dict_keys(
+    d: dict[Any, Any],
+    d_ref: dict[Any, Any],
+    ) -> dict[Any, Any]:
+    """
+    Match the keys of `d` to those of `d_ref`.
+    
+    Parameters
+    ----------
+    d : dict[Any, Any]
+        The dictionary.
+    d_ref : dict[Any, Any]
+        The reference dictionary.
+    
+    Returns
+    -------
+    dict[Any, Any]
+        A copy of `d` whose keys match those of `d_ref`.
+    """
+    
+    new_d = d.copy()
+    missing_keys = set()
+    for key in new_d.keys():
+        if key not in d_ref.keys():
+            missing_keys.add(key)
+    for key in missing_keys:
+        new_d.pop(key)
+    
+    return new_d
 
 
 def propagate_errors(
@@ -126,53 +183,92 @@ def propagate_errors(
     return np.sqrt(total_variance)
 
 
-def get_lc(
-    light_curves: TimeSeries,
+def camera_and_filter_key(
+    camera: str,
     fltr: str,
-    ) -> TimeSeries:
+    ) -> str:
     """
-    Given a table of light curves, extract the light curve for a single filter.
+    Create a unique camera:filter key. This unique key breaks degeneracies in multi-camera, multi-filter instruments,
+    such that flat-field corrections can be applied properly.
     
     Parameters
     ----------
-    light_curves : TimeSeries
-        The table of light curves.
+    camera : str
+        The camera. For single-camera instruments, this can simply be the name of the instrument. For multi-camera
+        instruments, however, this value should be unambiguous (e.g., the individual camera name or number).
     fltr : str
         The filter.
     
     Returns
     -------
-    TimeSeries
-        The light curve for the filter.
+    str
+        The unique camera:filter key.
     """
     
-    colnames = light_curves.colnames
-    new_colnames = []
-    
-    for colname in colnames:
-        # get filter fluxes
-        if 'rel_flux' in colname:
-            if f'{fltr}_rel_flux' in colname:
-                new_colnames.append(colname)
-        # get filter backgrounds if included
-        elif 'bkg' in colname:
-            if f'{fltr}_bkg' in colname:
-                new_colnames.append(colname)
-        # include all non-flux/non-background columns (time, time_bin_start, etc.)
-        else:
-            new_colnames.append(colname)
-    
-    lc = light_curves[*new_colnames]
-    
-    # remove NaN rows
-    f = np.asarray(lc[f'{fltr}_rel_flux'].value)
-    ferr = np.asarray(lc[f'{fltr}_rel_flux_err'].value)
-    mask = np.where(np.isnan(f) | np.isnan(ferr))[0]
-    lc.remove_rows(mask)
-    
-    return lc
+    return camera + ':' + fltr
 
 
+def camera_key(
+    key: str,
+    ) -> str:
+    """
+    Given a unique camera:filter key, get the camera. This is used to apply bias and dark noise corrections, which are
+    indifferent to the filter used.
+    
+    Parameters
+    ----------
+    key : str
+        The unique camera:filter key.
+    
+    Returns
+    -------
+    str
+        The camera.
+    """
+    
+    return key.split(':')[0]
+
+
+def filter_key(
+    key: str,
+    ) -> str:
+    """
+    Given a unique camera:filter key, get the filter.
+    
+    Parameters
+    ----------
+    key : str
+        The unique camera:filter key.
+    
+    Returns
+    -------
+    str
+        The filter.
+    """
+    
+    return key.split(':')[-1]
+
+
+def save_figure(
+    fig: Figure,
+    path: Path | str,
+    ) -> None:
+    """
+    Save a figure to the specified path.
+    
+    Parameters
+    ----------
+    fig : Figure
+        The figure.
+    path : Path | str
+        The path, including the file name and extension.
+    """
+    
+    fig.savefig(
+        path,
+        bbox_inches='tight',
+        )
+    print(f'[OPTICAM] Plot saved to {Path(path).resolve()}.')
 
 
 

@@ -8,6 +8,9 @@ from types import FunctionType
 from typing import Any
 
 
+from opticam.utils.helpers import camera_key
+
+
 
 
 def configure_logger(
@@ -90,7 +93,7 @@ def log_file(
             )
 
 
-def recursive_log(param: Any, depth: int = 0, max_depth: int = 5) -> Any:
+def recursive_log(param: Any, depth: int = 0, max_depth: int = 6) -> Any:
     """
     Recursively log parameters.
     
@@ -101,13 +104,15 @@ def recursive_log(param: Any, depth: int = 0, max_depth: int = 5) -> Any:
     depth : int, optional
         The parameter depth, by default 0.
     max_depth : int, optional
-        The maximum parameter depth, by default 5. This prevents infinite recursion.
+        The maximum parameter depth, by default 6. This prevents infinite recursion.
     
     Returns
     -------
     Any
         The logged parameter.
     """
+    
+    ignore_keys = {"_hash"}
     
     if depth > max_depth:
         return f"<Max depth ({max_depth}) reached>"
@@ -120,9 +125,9 @@ def recursive_log(param: Any, depth: int = 0, max_depth: int = 5) -> Any:
     if isinstance(param, (list, tuple, set)):
         return type(param)(recursive_log(item, depth + 1, max_depth) for item in param)
     if isinstance(param, dict):
-        return {key: recursive_log(value, depth + 1, max_depth) for key, value in param.items()}
+        return {key: recursive_log(value, depth + 1, max_depth) for key, value in param.items() if key not in ignore_keys}
     if hasattr(param, '__dict__'):
-        return {key: recursive_log(value, depth + 1, max_depth) for key, value in vars(param).items()}
+        return {key: recursive_log(value, depth + 1, max_depth) for key, value in vars(param).items() if key not in ignore_keys}
     return str(param)
 
 
@@ -152,16 +157,16 @@ def log_psf_params(
     
     psf_params_full = {}
     
-    for fltr in psf_params.keys():
+    for key in psf_params.keys():
         # convert from pixels to arcsec
-        semimajor_sigma_arcsec = psf_params[fltr]['semimajor_sigma'] * binning_scale * rebin_factor * pixel_scales[fltr]
-        semiminor_sigma_arcsec = psf_params[fltr]['semiminor_sigma'] * binning_scale * rebin_factor * pixel_scales[fltr]
+        semimajor_sigma_arcsec = psf_params[key]['semimajor_sigma'] * binning_scale * rebin_factor * pixel_scales[camera_key(key)]
+        semiminor_sigma_arcsec = psf_params[key]['semiminor_sigma'] * binning_scale * rebin_factor * pixel_scales[camera_key(key)]
         
-        psf_params_full[fltr] = {
+        psf_params_full[key] = {
             'semimajor_sigma_arcsec': semimajor_sigma_arcsec,
-            'semimajor_sigma_pix': psf_params[fltr]['semimajor_sigma'],
+            'semimajor_sigma_pix': psf_params[key]['semimajor_sigma'],
             'semiminor_sigma_arcsec': semiminor_sigma_arcsec,
-            'semiminor_sigma_pix': psf_params[fltr]['semiminor_sigma'],
+            'semiminor_sigma_pix': psf_params[key]['semiminor_sigma'],
         }
     
     # save PSF params to JSON file
