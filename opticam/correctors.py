@@ -479,8 +479,7 @@ class BiasCorrector(Corrector):
             raise ValueError(f'[OPTICAM] Inconsistent binning detected in the bias images. Image binnings have been logged to {self.out_directory.joinpath('diag/binnings.json')}.')
         
         unique_exptimes = set(exptimes.values())
-        zero_second_exposures = all([exptime == 0.0 for exptime in list(unique_exptimes)])
-        if len(unique_exptimes) > 1 or not zero_second_exposures:
+        if len(unique_exptimes) > 1:
             log_file(
                 out_directory=self.out_directory,
                 file_name='exptimes.json',
@@ -630,8 +629,10 @@ class DarkNoiseCorrector(Corrector):
             for dark_file in self.data_files[key]:
                 dark = dark_file.get_data()
                 
+                if self.rebin_factor > 1:
+                    dark = rebin_image(dark, self.rebin_factor)
+                
                 # apply bias correction
-                # TODO: check whether bias should be corrected after rebinning instead?
                 if self.bias_corrector is not None:
                     dark, bias_var = self.bias_corrector.correct(
                         image=dark,
@@ -639,9 +640,6 @@ class DarkNoiseCorrector(Corrector):
                         )
                 else:
                     bias_var = 0.
-                
-                if self.rebin_factor > 1:
-                    dark = rebin_image(dark, self.rebin_factor)
                 
                 darks.append(dark)
             
@@ -909,10 +907,7 @@ class FlatFieldCorrector(Corrector):
         
         if key not in self.master_images.keys():
             print(f'[OPTICAM] {key} master flat-field image not found. Attempting to create.')
-            try:
-                self.create_master_images()
-            except Exception as e:
-                raise Exception(f"[OPTICAM] Could not create master flat-field image(s) due to the following exception: {e}")
+            self.create_master_images()
         
         calibrated_image = image / self.master_images[key]
         
@@ -958,6 +953,9 @@ class FlatFieldCorrector(Corrector):
             for flat_file in self.data_files[key]:
                 flat, header = flat_file.get_data_and_header()
                 
+                if self.rebin_factor > 1:
+                    flat = rebin_image(flat, self.rebin_factor)
+                
                 if self.bias_corrector is not None:
                     flat, bias_var = self.bias_corrector.correct(
                         image=flat,
@@ -974,9 +972,6 @@ class FlatFieldCorrector(Corrector):
                         )
                 else:
                     dark_var = 0.
-                
-                if self.rebin_factor > 1:
-                    flat = rebin_image(flat, self.rebin_factor)
                 
                 flats.append(flat)
             
