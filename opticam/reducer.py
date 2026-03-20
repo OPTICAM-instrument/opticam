@@ -33,7 +33,7 @@ from opticam.utils.batching import get_batches, get_batch_size
 from opticam.utils.constants import bar_format
 from opticam.utils.data_checks import scan_data
 from opticam.utils.fits_handlers import get_data, get_stacked_images, save_stacked_images
-from opticam.utils.helpers import delete_keys_from_nested_dict
+from opticam.utils.helpers import delete_keys_from_nested_dict, match_dict_keys
 from opticam.utils.logging import configure_logger, log_psf_params, recursive_log
 
 
@@ -501,7 +501,7 @@ class Reducer:
             
             try:
                 # identify sources in stacked image
-                tbl = self.finder(
+                cat = self.finder(
                     stacked_image,
                     threshold,
                     )
@@ -513,14 +513,16 @@ class Reducer:
             stacked_images[key] = stacked_image
             
             # limit catalog to brightest sources
-            tbl = tbl[:max_catalog_sources]
+            cat = cat[:max_catalog_sources]
             
-            # save catalog
-            self.catalogs.update({key: tbl})  # type: ignore
-            self.catalogs[key].write(
-                os.path.join(self.out_directory, f"cat/{key}_catalog.ecsv"),
-                format="ascii.ecsv",
-                overwrite=True,
+            # update catalogs
+            self.catalogs.update({key: cat})  # type: ignore
+            
+            # save updated catalogs
+            save_catalog(
+                catalog=cat,
+                key=key,
+                out_directory=self.out_directory,
                 )
             
             self.psf_params[key] = set_psf_params(
@@ -662,8 +664,8 @@ class Reducer:
                     reference_coords,
                     )
             else:
-                # find affine transformation using astroalign
                 try:
+                    # find affine transformation using astroalign
                     transform = find_transform(
                         reference_coords,
                         coords,
@@ -685,7 +687,7 @@ class Reducer:
                 queued_logs.append(log_message)
                 continue
             
-            transforms[file.key] = transform.params.tolist()  # type: ignore
+            transforms[file.key] = transform.params.tolist()
             bkg_dict[file.key] = {
                 'Median': bkg.background_median,
                 'RMS': bkg.background_rms_median,
@@ -899,7 +901,7 @@ class Reducer:
         
         plot_snrs(
             out_directory=self.out_directory,
-            files=self.reference_files,
+            files=match_dict_keys(self.reference_files, self.catalogs),
             background=self.background,
             psf_params=self.psf_params,
             catalogs=self.catalogs,
@@ -927,7 +929,7 @@ class Reducer:
         
         plot_noise(
             out_directory=self.out_directory,
-            files=self.reference_files,
+            files=match_dict_keys(self.reference_files, self.catalogs),
             background=self.background,
             psf_params=self.psf_params,
             catalogs=self.catalogs,
@@ -1243,38 +1245,6 @@ class Reducer:
 
 
 ################### for a clearner UI, the following functions are intentionally not Reducer methods ###################
-
-
-def log_dark_current(
-    out_directory: str,
-    dark_currs: dict[str, float],
-    bmjds: dict[str, float],
-    camera_files: dict[str, list[str]],
-    ) -> None:
-    """
-    Save the dark currents for each filter.
-    
-    Parameters
-    ----------
-    out_directory : str
-        The path to the output directory.
-    dark_currs : dict[str, float]
-        The dark current for each file {file: dark current}.
-    bmjds : dict[str, float]
-        The time stamp for each file {file: time stamp}.
-    camera_files : dict[str, list[str]]
-        The files grouped by filter {filter: files}.
-    """
-    
-    dark_curr_df = pd.DataFrame(dark_currs.items(), columns=['file', 'dark_current'])
-    bmjds_df = pd.DataFrame(bmjds.items(), columns=['file', 'BMJD'])
-    df = pd.merge(dark_curr_df, bmjds_df, on='file')
-    df = df[['BMJD', 'dark_current', 'file']]  # change column order
-    
-    for key, files in camera_files.items():
-        filter_df = df[df['file'].isin(files)]
-        filter_df = filter_df.drop(columns='file')
-        filter_df.to_csv(os.path.join(out_directory, f'diag/{key}_dark_current.csv'), index=False)
 
 
 def set_psf_params(
@@ -1617,3 +1587,27 @@ def parse_photometry_results(
     
     return photometry_results
 
+
+def save_catalog(
+    catalog: QTable,
+    key: str,
+    out_directory: Path,
+    ) -> None:
+    """
+    Save a camera:filter catalog to file using `astropy`'s ECSV format.
+    
+    Parameters
+    ----------
+    catalog : QTable
+        The catalog for a specific camera:filter combination.
+    key : str
+        The camera:filter key.
+    out_directory : Path
+        The output directory.
+    """
+    
+    catalog.write(
+        out_directory / 'cat' / f'{key}_catalog.ecsv',
+        format='ascii.ecsv',
+        overwrite=True,
+        )

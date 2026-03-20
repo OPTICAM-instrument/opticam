@@ -110,6 +110,37 @@ def delete_keys_from_nested_dict(
             delete_keys_from_nested_dict(d[key], keys)
 
 
+def match_dict_keys(
+    d: dict[Any, Any],
+    d_ref: dict[Any, Any],
+    ) -> dict[Any, Any]:
+    """
+    Match the keys of `d` to those of `d_ref`.
+    
+    Parameters
+    ----------
+    d : dict[Any, Any]
+        The dictionary.
+    d_ref : dict[Any, Any]
+        The reference dictionary.
+    
+    Returns
+    -------
+    dict[Any, Any]
+        A copy of `d` whose keys match those of `d_ref`.
+    """
+    
+    new_d = d.copy()
+    missing_keys = set()
+    for key in new_d.keys():
+        if key not in d_ref.keys():
+            missing_keys.add(key)
+    for key in missing_keys:
+        new_d.pop(key)
+    
+    return new_d
+
+
 def propagate_errors(
     data: NDArray,
     bias_var: float | NDArray[np.float64],
