@@ -75,17 +75,18 @@ class DifferentialPhotometer:
         self.catalogs = {}
         for key in self.keys:
             try:
-                self.catalogs.update(
-                    {
-                        key: QTable.read(
-                            self.out_directory.joinpath(f'cat/{key}_catalog.ecsv'),
-                            format='ascii.ecsv'),
-                        },
+                cat = QTable.read(
+                    self.out_directory.joinpath(f'cat/{key}_catalog.ecsv'),
+                    format='ascii.ecsv',
                     )
             except:
                 print(f'[OPTICAM] Could not load {self.out_directory.joinpath(f'cat/{key}_catalog.ecsv')}, skipping.')
-                self.keys.remove(key)
                 continue
+            
+            self.catalogs.update({key: cat})
+        
+        # update keys to match catalog
+        self.keys = list(self.catalogs.keys())
         
         ########################################### plot catalogs ###########################################
         
@@ -492,7 +493,7 @@ class DifferentialPhotometer:
         
         axes[0].set_title(f'{key} Target ID: {comparison1}, Comparison ID: {comparison2}')
         axes[0].errorbar(
-            time,
+            (comparison1_df[self.time_key].values - self.t_ref.mjd) * 86400,
             comparison1_df['flux'] / comparison1_df['flux'].median(),
             np.abs(comparison1_df['flux_err'] / comparison1_df['flux'].median()),
             fmt="kx-",
@@ -502,7 +503,7 @@ class DifferentialPhotometer:
             alpha=.5,
             )
         axes[0].errorbar(
-            time,
+            (comparison2_df[self.time_key].values - self.t_ref.mjd) * 86400,
             comparison2_df['flux'] / comparison2_df['flux'].median(),
             np.abs(comparison2_df['flux_err'] / comparison2_df['flux'].median()),
             fmt="r+-",
@@ -519,7 +520,7 @@ class DifferentialPhotometer:
         axes[1].errorbar(
             time,
             relative_flux / np.median(relative_flux),
-            np.abs(relative_flux_error) / np.median(relative_flux),
+            relative_flux_error / np.abs(np.median(relative_flux)),
             fmt="k.",
             ms=2,
             ecolor="grey",
@@ -627,16 +628,13 @@ def compute_relative_flux(
     comp_fluxes = np.sum(np.asarray([df['flux'].values for df in comp_dfs]), axis=0)
     comp_flux_errors = np.sqrt(np.sum([np.square(df['flux_err'].values) for df in comp_dfs], axis=0))
     
-    target_flux = np.asarray(target_df['flux'].values)
-    target_flux_err = np.asarray(target_df['flux_err'].values)
+    target_flux = target_df['flux'].values
+    target_flux_err = target_df['flux_err'].values
     
     relative_flux = target_flux / comp_fluxes
-    relative_flux_error = relative_flux * np.abs(np.sqrt(np.square(target_flux_err / target_flux) + np.square(comp_flux_errors / comp_fluxes)))
+    relative_flux_error = relative_flux * np.sqrt(np.square(target_flux_err / target_flux) + np.square(comp_flux_errors / comp_fluxes))
     
-    # mask non-finite values (e.g., due to non-detections)
-    mask = np.isfinite(relative_flux) & np.isfinite(relative_flux_error)
-    
-    return time[mask], relative_flux[mask], relative_flux_error[mask]
+    return time, relative_flux, np.abs(relative_flux_error)
 
 
 def transform_IDs(
