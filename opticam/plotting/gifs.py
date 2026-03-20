@@ -121,7 +121,7 @@ def create_gif_frame(
         ax.set_xlabel('X', fontsize='large')
         ax.set_ylabel('Y', fontsize='large')
     
-    fig.savefig(os.path.join(out_directory, f'diag/{key}_gif_frames/{file_name.split('.')[0]}.png'), bbox_inches='tight')
+    fig.savefig(os.path.join(out_directory, f'diag/{key}_gif_frames/{file.path.name.split(".")[0]}_{file.ext}.png'), bbox_inches='tight')
     
     fig.clear()
     plt.close(fig)
@@ -152,7 +152,7 @@ def compile_gif(
     frames = []
     for file in camera_files[key]:
         try:
-            frames.append(Image.open(os.path.join(out_directory, f'diag/{key}_gif_frames/{file.path.name.split(".")[0]}.png')))
+            frames.append(Image.open(os.path.join(out_directory, f'diag/{key}_gif_frames/{file.path.name.split(".")[0]}_{file.ext}.png')))
         except:
             pass
     
