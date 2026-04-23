@@ -178,6 +178,29 @@ def get_read_stderr(
     return counts_to_mag_factor * np.sqrt(p_read) / N_source
 
 
+def get_scint_stderr(
+    N_source: float | NDArray,
+    rel_scint_noise: float,
+    ) -> float | NDArray:
+    """
+    Get the standard error (in magnitudes) of the scintillation noise.
+    
+    Parameters
+    ----------
+    N_source : float | NDArray
+        The total number of source counts.
+    rel_scint_noise : float
+        The relative scintillation noise.
+    
+    Returns
+    -------
+    float | NDArray
+        The standard error (in magnitudes) of the scintillation noise.
+    """
+    
+    return counts_to_mag_factor * (np.zeros(len(N_source)) + rel_scint_noise)
+
+
 def snr(
     N_source: float | NDArray,
     N_pix: float,
@@ -186,6 +209,7 @@ def snr(
     dark_var: float,
     flat_var: float,
     read_noise: float,
+    scint_noise: NDArray,
     ) -> float | NDArray:
     """
     The (simplified) S/N ratio equation or CCD Equation (see Chapter 4.4 of Handbook of CCD Astronomy by Howell, 2006).
@@ -206,6 +230,8 @@ def snr(
         The flat-field variance.
     read_noise : float
         The read noise of the detector in electrons/pixel.
+    scint_noise : NDArray
+        The scintillation noise.
     
     Returns
     -------
@@ -213,7 +239,7 @@ def snr(
         The S/N ratio.
     """
     
-    return N_source / np.sqrt(N_source + N_pix * (n_sky + bias_var + dark_var + flat_var + read_noise**2))
+    return N_source / np.sqrt(N_source + scint_noise**2 + N_pix * (n_sky + bias_var + dark_var + flat_var + read_noise**2))
 
 
 def snr_stderr(
@@ -224,6 +250,7 @@ def snr_stderr(
     dark_var: float,
     flat_var: float,
     read_noise: float,
+    rel_scint_noise: float,
     ) -> float | NDArray:
     """
     The standard error (in magnitudes) on the CCD Equation (see Chapter 4.4 of Handbook of CCD Astronomy by Howell, 
@@ -245,6 +272,8 @@ def snr_stderr(
         The flat-field variance.
     read_noise : float
         The read noise of the detector in electrons/pixel.
+    rel_scint_noise : float
+        The relative scintillation noise.
     
     Returns
     -------
@@ -254,7 +283,9 @@ def snr_stderr(
     
     p = N_pix * (n_sky + bias_var + dark_var + flat_var + read_noise**2)
     
-    return counts_to_mag_factor * np.sqrt(N_source + p) / N_source
+    scint_noise = rel_scint_noise * N_source
+    
+    return counts_to_mag_factor * np.sqrt(N_source + scint_noise**2 + p) / N_source
 
 
 def get_noise_params(
@@ -266,7 +297,7 @@ def get_noise_params(
     bias_corrector: BiasCorrector | None,
     dark_corrector: DarkNoiseCorrector | None,
     flat_corrector: FlatFieldCorrector | None,
-    ) -> tuple[NDArray[np.int64], NDArray[np.float64], NDArray[np.float64], float, float, float, float, float]:
+    ) -> tuple[NDArray[np.int64], NDArray[np.float64], NDArray[np.float64], float, float, float, float, float, NDArray[np.float64]]:
     """
     Get the noise values of a science image.
     
@@ -291,19 +322,14 @@ def get_noise_params(
     
     Returns
     -------
-    tuple[NDArray, NDArray, float, float, float]
+    tuple[NDArray[np.int64], NDArray[np.float64], NDArray[np.float64], float, float, float, float, float, NDArray[np.float64]]
         The source IDs, fluxes, flux errors, number of aperture pixels, backgorund counts/pixel, bias variance, dark
-        variance, and flat-field variance.
+        variance, flat-field variance, and scintillation noise.
     """
-    
-    header = file.get_header()
-    camera = instrument.get_camera(header=header)
-    fltr = instrument.get_filter(header=header)
-    key = camera_and_filter_key(camera=camera, fltr=fltr)
     
     coords = np.asarray([catalog['xcentroid'], catalog['ycentroid']]).T
     
-    img = get_data(
+    img, bias_var, dark_var, flat_var, rel_scint_noise = get_data(
         file=file,
         instrument=instrument,
         bias_corrector=bias_corrector,
@@ -311,28 +337,7 @@ def get_noise_params(
         flat_corrector=flat_corrector,
         rebin_factor=1,
         remove_cosmic_rays=False,
-        )[0]
-    
-    # get median bias variance
-    if bias_corrector is not None:
-        bias_var = bias_corrector.master_variances[camera]
-    else:
-        bias_var = 0.
-    
-    # get median dark variance
-    if dark_corrector is not None:
-        if camera in dark_corrector.master_images.keys():
-            dark_var = dark_corrector.master_variances[camera]
-        else:
-            dark_var = instrument.get_dark_flux(header=header)
-    else:
-        dark_var = 0.
-    
-    # get median flat-field variance
-    if flat_corrector is not None:
-        flat_var = flat_corrector.master_variances[key]
-    else:
-        flat_var = 0.
+        )
     
     # global background
     bkg = background(img)
@@ -353,6 +358,7 @@ def get_noise_params(
         image_coords=coords,
         psf_params=psf_params,
         read_noise=instrument.get_read_noise(file=file),
+        rel_scint_noise=rel_scint_noise,
         )
     
     # get the number of pixels in the aperture
@@ -361,11 +367,12 @@ def get_noise_params(
     fluxes = np.array(phot_results['flux'])
     flux_errs = np.array(phot_results['flux_err'])
     source_ids = np.arange(len(catalog)) + 1
+    scint_noise = rel_scint_noise * fluxes
     
     # mask unphysical flux values
     mask = fluxes > 1.
     
-    return source_ids[mask], fluxes[mask], flux_errs[mask], N_pix, n_sky, float(np.median(bias_var)), float(np.median(dark_var)), float(np.median(flat_var))
+    return source_ids[mask], fluxes[mask], flux_errs[mask], N_pix, n_sky, float(np.median(bias_var)), float(np.median(dark_var)), float(np.median(flat_var)), scint_noise
 
 
 def get_snrs(
@@ -406,7 +413,7 @@ def get_snrs(
         The source IDs and S/N for each source.
     """
     
-    source_ids, fluxes, flux_errs, N_pix, n_sky, bias_var, dark_var, flat_var = get_noise_params(
+    source_ids, fluxes, flux_errs, N_pix, n_sky, bias_var, dark_var, flat_var, scint_noise = get_noise_params(
         file=file,
         catalog=catalog,
         background=background,
@@ -426,6 +433,7 @@ def get_snrs(
             dark_var=dark_var,
             flat_var=flat_var,
             read_noise=instrument.get_read_noise(file=file),
+            scint_noise=scint_noise,
             )
         )
 
@@ -469,9 +477,12 @@ def characterise_noise(
         The noies properties.
     """
     
-    read_noise = instrument.get_read_noise(file=file)
+    header = file.get_header()
     
-    source_ids, fluxes, flux_errs, N_pix, n_sky, bias_var, dark_var, flat_var = get_noise_params(
+    read_noise = instrument.get_read_noise(header=header)
+    rel_scint_noise = instrument.get_relative_scintillation_noise(header=header)
+    
+    source_ids, fluxes, flux_errs, N_pix, n_sky, bias_var, dark_var, flat_var, scint_noise = get_noise_params(
         file=file,
         catalog=catalog,
         background=background,
@@ -499,13 +510,21 @@ def characterise_noise(
         dark_var=dark_var,
         flat_var=flat_var,
         read_noise=read_noise,
+        rel_scint_noise=rel_scint_noise,
         )
-    results['sky_noise'] = get_sky_stderr(N_source, N_pix, n_sky)
-    results['shot_noise'] = get_shot_stderr(N_source)
-    results['bias'] = get_bias_stderr(N_source, N_pix, bias_var)
+    results['sky_noise'] = get_sky_stderr(
+        N_source=N_source,
+        N_pix=N_pix,
+        n_sky=n_sky,
+        )
+    results['shot_noise'] = get_shot_stderr(N_source=N_source)
+    results['bias'] = get_bias_stderr(
+        N_source=N_source,
+        N_pix=N_pix, bias_var=bias_var)
     results['dark_noise'] = get_dark_stderr(N_source, N_pix, dark_var)
     results['flat'] = get_flat_stderr(N_source, N_pix, flat_var)
     results['read_noise'] = get_read_stderr(N_source, N_pix, read_noise=read_noise)
+    results['scint_noise'] = get_scint_stderr(N_source=N_source, rel_scint_noise=rel_scint_noise)
     
     results['measured_mags'] = -2.5 * np.log10(fluxes)
     results['measured_noise'] = counts_to_mag_factor * flux_errs / fluxes
@@ -517,6 +536,7 @@ def characterise_noise(
         dark_var=dark_var,
         flat_var=flat_var,
         read_noise=read_noise,
+        rel_scint_noise=rel_scint_noise,
         )
     
     return results
