@@ -4,10 +4,10 @@ from typing import Any, Callable
 
 
 from astropy import units as u
-from astropy.units import Quantity
 from astropy.table import QTable
 from astropy.timeseries import TimeSeries
-from astropy.visualization import simple_norm
+from astropy.time import Time
+from astropy.visualization import simple_norm, PercentileInterval
 from matplotlib import pyplot as plt
 from matplotlib.patches import Circle, Ellipse, Rectangle
 from matplotlib.figure import Figure
@@ -39,7 +39,9 @@ def plot_catalogs(
     catalogs: dict[str, QTable],
     show: bool,
     save: bool,
-    ) -> None:
+    percentile: float | None = None,
+    return_fig: bool = False,
+    ) -> Figure | None:
     """
     Plot the source catalogs.
     
@@ -55,6 +57,13 @@ def plot_catalogs(
         Whether to show the plot.
     save : bool
         Whether to save the plot.
+    return_fig : bool, optional
+        Whether to return the figure, by default `False`.
+    
+    Returns
+    -------
+    Figure | None
+        If `return_fig=True`, the resulting figure is returned. Otherwise, nothing is returned.
     """
     
     ncols: int = len(stacked_images)
@@ -73,16 +82,27 @@ def plot_catalogs(
         plot_image = np.clip(stacked_images[fltr], 0, None)  # clip negative values to zero for better visualisation
         
         # plot stacked image
-        axes[i].imshow(
-            plot_image,
-            origin="lower",
-            cmap="Greys",
-            interpolation="nearest",
-            norm=simple_norm(
+        if percentile is None:
+            axes[i].imshow(
                 plot_image,
-                stretch="log",
-                ),
-            )
+                origin="lower",
+                cmap="Greys",
+                interpolation="nearest",
+                norm=simple_norm(
+                    plot_image,
+                    stretch="log",
+                    ),
+                )
+        else:
+            interval = PercentileInterval(percentile)
+            vmin, vmax = interval.get_limits(stacked_images[fltr])
+            axes[i].imshow(
+                plot_image,
+                origin="lower",
+                cmap="Greys",
+                vmin=vmin,
+                vmax=vmax,
+                )
         
         # get aperture radius
         radius = 5 * np.median(catalogs[fltr]["semimajor_sigma"].value)  # type: ignore
@@ -122,9 +142,9 @@ def plot_catalogs(
     
     if show:
         plt.show(fig)
-    else:
-        fig.clear()
-        plt.close(fig)
+    
+    if return_fig:
+        return fig
 
 
 def plot_time_between_files(
@@ -715,7 +735,9 @@ def plot_rms_vs_median_flux(
         ratios = []
         # highlight potentially variable sources
         for source_number, values in data[key].items():
-            j = np.where(pl_fits[key]['flux'] == values['flux'])[0]
+            # get index of current source
+            j = np.where(pl_fits[key]['ids'] == int(source_number))[0]
+            
             r = values['rms'] / pl_fits[key]['rms'][j]
             ratios.append(r)
             
@@ -1046,6 +1068,7 @@ def plot_noise(
             axes[0][i].plot(results['model_mags'], results['flat'], ls=(0, (3, 1, 1, 1)), lw=1, label='Flat')
         
         axes[0][i].plot(results['model_mags'], results['read_noise'], ls=(0, (3, 5, 1, 5, 1, 5)), lw=1, label='Read noise')
+        axes[0][i].plot(results['model_mags'], results['scint_noise'], ls=(0, (1, 10)), lw=1, label='Scintillation')
         
         axes[0][i].scatter(
             results['measured_mags'],
@@ -1400,7 +1423,7 @@ def get_max_region_size(
 def plot_light_curves(
     keys: list[str],
     light_curves: TimeSeries,
-    t_ref: Quantity | None,
+    t_ref: Time,
     y_label: Any = None,
     ) -> Figure:
     """
@@ -1445,9 +1468,9 @@ def plot_light_curves(
         
         lc = get_lc(light_curves, key=key)
         
-        time = (lc['time'] - t_ref).to_value(u.s)
-        flux = lc[f'{key}_rel_flux'].value
-        flux_err = lc[f'{key}_rel_flux_err'].value
+        time = (lc.time - t_ref).to_value(u.s)
+        flux = lc[f'{key}_rel_flux']
+        flux_err = lc[f'{key}_rel_flux_err']
         
         axes[i].errorbar(
             time,
@@ -1481,7 +1504,7 @@ def plot_light_curves(
             frameon=False,
         )
     
-    axes[-1].set_xlabel(f'Time from BMJD {t_ref.value:.4f} [s]', fontsize='large')
+    axes[-1].set_xlabel(f'Time from BMJD {t_ref.mjd:.4f} [s]', fontsize='large')
     
     if y_label is not None:
         axes[nrows // 2].set_ylabel(f'{y_label}', fontsize='large')
