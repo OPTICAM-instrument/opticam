@@ -8,8 +8,11 @@ from typing import Callable, Literal
 
 
 from astroalign import find_transform
+from astropy import units as u
 from astropy.table import QTable
 from matplotlib import pyplot as plt
+from matplotlib.figure import Figure
+from matplotlib.patches import Circle
 import numpy as np
 from numpy.typing import NDArray
 import pandas as pd
@@ -23,6 +26,7 @@ from opticam.utils.transforms import find_translation
 from opticam.background.global_background import BaseBackground, DefaultBackground
 from opticam.correctors import BiasCorrector, DarkNoiseCorrector, FlatFieldCorrector
 from opticam.finders import DefaultFinder, get_source_coords_from_image
+from opticam.fitting.routines import fit_psf
 from opticam.instruments import Instrument, OPTICAM_MX
 from opticam.mef_slice import MEFSlice
 from opticam.photometers import AperturePhotometer, BasePhotometer
@@ -576,6 +580,119 @@ class Reducer:
             out_directory=self.out_directory,
             unaligned_files=self.unaligned_files,
             )
+
+
+    def pick_sources(self, percentile: float = 99.0):
+        """
+        Interactive plot for manually adding sources to the catalogs.
+        
+        Parameters
+        ----------
+        percentile: float, optional
+            The percentile to use for plotting source catalogues, by default `99.0`.
+        
+        Returns
+        -------
+        QTable
+            The table containing the new
+        """
+        
+        print(f'[OPTICAM] Warning: Reducer.add_sources() requires a compatible matplotlib backend.\n\
+            You may need to add the line, e.g., "%matploblib widget" before calling add_sources().')
+        
+        stacked_images = get_stacked_images(self.out_directory)
+        
+        fig = plot_catalogs(
+            out_directory=self.out_directory,
+            stacked_images=stacked_images,
+            catalogs=self.catalogs,
+            show=self.show_plots,
+            save=False,
+            percentile=percentile,
+            return_fig=True,
+            )
+        
+        add_source = partial(
+            self._add_source,
+            fig=fig,
+            stacked_images=stacked_images,
+            )
+        
+        fig.canvas.mpl_connect('button_press_event', add_source)
+
+
+    def _add_source(
+        self,
+        event: Literal['button_press_event'],
+        fig: Figure,
+        stacked_images: dict[str, NDArray],
+        ) -> None:
+        """
+        Add a manually-picked source to the associated catalog.
+        
+        Parameters
+        ----------
+        event : Literal["button_press_event"]
+            The event.
+        fig : Figure
+            The catalog plot.
+        stacked_images : dict[str, NDArray]
+            The catalog images.
+        """
+        
+        if event.inaxes is None:
+            return
+        
+        ax = event.inaxes
+        key = ax.get_title()  # get camera:filter key
+        
+        # get clicked coordinates
+        x, y = event.xdata, event.ydata
+        int_x, int_y = int(x), int(y)
+        
+        # get a small region around the clicked coordinates
+        region_width = min(stacked_images[key].shape) // 32
+        region = stacked_images[key][int_y-region_width:int_y+region_width, int_x-region_width:int_x+region_width]
+        
+        # get peak flux coordinates in region
+        # this is the initial guess for our source position
+        y_init, x_init = np.unravel_index(np.argmax(region), region.shape)
+        
+        # get PSF coordinates in region
+        x_region, y_region, theta_rad = fit_psf(
+            image=region,
+            x_init=int(x_init),
+            y_init=int(y_init),
+            semimajor_sigma=self.psf_params[key]['semimajor_sigma'],
+            semiminor_sigma=self.psf_params[key]['semiminor_sigma'],
+            )
+        
+        # convert region coordinates to image coordinates
+        x_image = x_region + x - region_width
+        y_image = y_region + y - region_width
+        
+        # add minimally required information for chosen source to catalog
+        new_row = {
+            'xcentroid': x_image,
+            'ycentroid': y_image,
+            'orientation': np.rad2deg(theta_rad) * u.deg,
+            }
+        self.catalogs[key].add_row(new_row)
+        
+        save_catalog(
+            catalog=self.catalogs[key],
+            key=key,
+            out_directory=self.out_directory,
+            )
+        
+        patch = Circle(
+            (x_image, y_image),
+            region_width,
+            edgecolor='r',
+            facecolor='none',
+            )
+        ax.add_patch(patch)
+        fig.canvas.draw()
 
 
     def _align_batch(
@@ -1167,7 +1284,7 @@ class Reducer:
             The photometry results.
         """
         
-        image, bias_var, dark_var, flat_var = get_data(
+        image, bias_var, dark_var, flat_var, rel_scint_noise = get_data(
             file=file,
             instrument=self.instrument,
             bias_corrector=self.bias_corrector,
@@ -1207,6 +1324,7 @@ class Reducer:
             image_coords=image_coords,
             psf_params=self.psf_params[key],
             read_noise=self.instrument.get_read_noise(file=file),
+            rel_scint_noise=rel_scint_noise,
             )
         
         # add time stamp
