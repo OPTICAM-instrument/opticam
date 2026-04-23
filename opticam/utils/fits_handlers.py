@@ -42,7 +42,7 @@ def get_header_info(
     """
     
     header = file.get_header()
-    exposure = float(header[instrument.exptime_kw])
+    exposure = instrument.get_exptime(header=header)
     camera = instrument.get_camera(header=header)
     fltr = instrument.get_filter(header=header)
     binning = instrument.get_binning(header=header)
@@ -72,6 +72,7 @@ def get_data(
         float | NDArray[np.float64],
         float | NDArray[np.float64],
         float | NDArray[np.float64],
+        float,
         ]:
     """
     Get the (calibrated) image data from a file.
@@ -95,9 +96,9 @@ def get_data(
     
     Returns
     -------
-    Tuple[NDArray[np.float64], float | NDArray[np.float64], float | NDArray[np.float64], float | NDArray[np.float64]]
-        The corrected image and the master bias, dark, and flat variances. If any of the correctors are undefined,
-        the variance of that corrector is set to 0.
+    Tuple[NDArray[np.float64], float | NDArray[np.float64], float | NDArray[np.float64], float | NDArray[np.float64], float]
+        The corrected image, the master bias, dark, and flat variances, and the relative scintillation noise. If any of
+        the correctors are undefined, the variance of that corrector is set to 0.
     """
     
     data, header = file.get_data_and_header()
@@ -146,7 +147,7 @@ def get_data(
     if rebin_factor > 1:
         data = rebin_image(data, rebin_factor)
     
-    return data, bias_var, dark_var, flat_var
+    return data, bias_var, dark_var, flat_var, instrument.get_relative_scintillation_noise(header=header)
 
 
 def save_stacked_images(
