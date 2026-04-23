@@ -10,7 +10,7 @@ from photutils.aperture import aperture_photometry, EllipticalAperture
 
 from opticam.background.local_background import BaseLocalBackground
 from opticam.utils.constants import fwhm_scale
-from opticam.utils.helpers import camel_to_snake, propagate_errors
+from opticam.utils.helpers import camel_to_snake, combine_variances
 
 
 
@@ -66,6 +66,7 @@ class BasePhotometer(ABC):
         image_coords: NDArray | None,
         psf_params: Dict[str, float],
         read_noise: float,
+        rel_scint_noise: float,
         ) -> Dict[str, List]:
         """
         Compute the fluxes of the catalogued sources from the given image.
@@ -93,6 +94,8 @@ class BasePhotometer(ABC):
             *degrees*).
         read_noise : float
             The detector's read noise.
+        rel_scint_noise : float
+            The relative scintillation noise.
         
         Returns
         -------
@@ -253,6 +256,7 @@ class BasePhotometer(ABC):
         position: NDArray,
         psf_params: Dict[str, float],
         read_noise: float,
+        rel_scint_noise: float,
         ) -> Dict[str, List]:
         """
         Populate the results dictionary with the computed flux, flux error, and background (if applicable) using the
@@ -284,6 +288,8 @@ class BasePhotometer(ABC):
             *degrees*).
         read_noise : float
             The detector's read noise.
+        rel_scint_noise : float
+            The relative scintillation noise.
         
         Returns
         -------
@@ -301,6 +307,7 @@ class BasePhotometer(ABC):
                 position=position,
                 psf_params=psf_params,
                 read_noise=read_noise,
+                rel_scint_noise=rel_scint_noise,
             )
             
             results['flux'].append(flux)
@@ -315,6 +322,7 @@ class BasePhotometer(ABC):
                 position=position,
                 psf_params=psf_params,
                 read_noise=read_noise,
+                rel_scint_noise=rel_scint_noise,
             )
             
             results['flux'].append(flux)
@@ -411,6 +419,7 @@ class AperturePhotometer(BasePhotometer):
         image_coords: NDArray | None,
         psf_params: Dict[str, float],
         read_noise: float,
+        rel_scint_noise: float,
         ) -> Dict[str, List]:
         """
         Compute the fluxes of the catalogued sources from the given image.
@@ -438,6 +447,8 @@ class AperturePhotometer(BasePhotometer):
             *degrees*).
         read_noise : float
             The detector's read noise.
+        rel_scint_noise : float
+            The relative scintillation noise.
         
         Returns
         -------
@@ -474,6 +485,7 @@ class AperturePhotometer(BasePhotometer):
                 position=position,
                 psf_params=psf_params,
                 read_noise=read_noise,
+                rel_scint_noise=rel_scint_noise,
                 )
         
         return results
@@ -489,6 +501,7 @@ class AperturePhotometer(BasePhotometer):
         position: NDArray,
         psf_params: Dict[str, float],
         read_noise: float,
+        rel_scint_noise: float,
         ) -> Tuple[float, float] | Tuple[float, float, float, float]:
         """
         Compute the aperture flux of a source in the image.
@@ -513,6 +526,8 @@ class AperturePhotometer(BasePhotometer):
             *degrees*).
         read_noise : float
             The instrument's read noise.
+        rel_scint_noise : float
+            The relative scintillation noise.
         
         Returns
         -------
@@ -527,7 +542,7 @@ class AperturePhotometer(BasePhotometer):
             )
         
         if self.local_background_estimator is None:
-            error = propagate_errors(
+            total_var = combine_variances(
                 data=image,
                 bias_var=bias_var,
                 dark_var=dark_var,
@@ -535,10 +550,11 @@ class AperturePhotometer(BasePhotometer):
                 background_rms=np.asarray(background_rms),
                 read_noise=read_noise,
                 )
-            phot_table = aperture_photometry(image, aperture, error=error)
             
-            flux = float(phot_table["aperture_sum"].value[0])  # type: ignore
-            flux_err = float(phot_table["aperture_sum_err"].value[0])  # type: ignore
+            phot_table = aperture_photometry(image, aperture, error=np.sqrt(total_var))
+            
+            flux = phot_table["aperture_sum"].value[0]
+            flux_err = np.sqrt(phot_table["aperture_sum_err"].value[0]**2 + (rel_scint_noise * flux)**2)
             
             return flux, flux_err
         else:
@@ -552,7 +568,7 @@ class AperturePhotometer(BasePhotometer):
                 )
             
             data_clean = image - local_background
-            error = propagate_errors(
+            total_var = combine_variances(
                 data=data_clean,
                 bias_var=bias_var,
                 dark_var=dark_var,
@@ -561,10 +577,10 @@ class AperturePhotometer(BasePhotometer):
                 read_noise=read_noise,
             )
             
-            phot_table = aperture_photometry(data_clean, aperture, error=error)
+            phot_table = aperture_photometry(data_clean, aperture, error=np.sqrt(total_var))
             
-            flux = float(phot_table["aperture_sum"].value[0])  # type: ignore
-            flux_err = float(phot_table["aperture_sum_err"].value[0])  # type: ignore
+            flux = phot_table["aperture_sum"].value[0]
+            flux_err = np.sqrt(phot_table["aperture_sum_err"].value[0]**2 + (rel_scint_noise * flux)**2)
             
             return flux, flux_err, float(local_background), float(local_background_rms)
 
@@ -634,6 +650,7 @@ class OptimalPhotometer(BasePhotometer):
         image_coords: NDArray | None,
         psf_params: Dict[str, float],
         read_noise: float,
+        rel_scint_noise: float,
         ) -> Dict[str, List]:
         """
         Compute the fluxes of the catalogued sources from the given image.
@@ -661,6 +678,8 @@ class OptimalPhotometer(BasePhotometer):
             *degrees*).
         read_noise : float
             The detector's read noise.
+        rel_scint_noise : float
+            The relative scintillation noise.
         
         Returns
         -------
@@ -694,6 +713,7 @@ class OptimalPhotometer(BasePhotometer):
                 position=position,
                 psf_params=psf_params,
                 read_noise=read_noise,
+                rel_scint_noise=rel_scint_noise,
                 )
         
         return results
@@ -709,6 +729,7 @@ class OptimalPhotometer(BasePhotometer):
         position: NDArray,
         psf_params: Dict[str, float],
         read_noise: float,
+        rel_scint_noise: float,
         ) -> Tuple[float, float] | Tuple[float, float, float, float]:
         """
         Compute the optimal flux of a source in the image as described in Naylor 1998, MNRAS, 296, 339-346.
@@ -733,6 +754,8 @@ class OptimalPhotometer(BasePhotometer):
             *degrees*).
         read_noise : float
             The instrument's read noise.
+        rel_scint_noise : float
+            The relative scintillation noise.
         
         Returns
         -------
@@ -751,6 +774,7 @@ class OptimalPhotometer(BasePhotometer):
                 read_noise=read_noise,
                 position=position,
                 psf_params=psf_params,
+                rel_scint_noise=rel_scint_noise,
                 )
         else:
             # estimate local background using annulus
@@ -771,6 +795,7 @@ class OptimalPhotometer(BasePhotometer):
                 read_noise=read_noise,
                 position=position,
                 psf_params=psf_params,
+                rel_scint_noise=rel_scint_noise,
                 )
             
             return flux, flux_error, float(local_background), float(local_background_rms)
@@ -836,6 +861,7 @@ def get_optimal_flux_and_error(
     read_noise: float,
     position: NDArray[np.float64],
     psf_params: Dict[str, float],
+    rel_scint_noise: float,
     ) -> Tuple[float, float]:
     """
     Compute the optimal flux and its error.
@@ -858,6 +884,8 @@ def get_optimal_flux_and_error(
         The source position [x, y].
     psf_params : Dict[str, float]
         The PSF parameters.
+    rel_scint_noise : float
+        The relative scintillation noise.
     
     Returns
     -------
@@ -865,7 +893,7 @@ def get_optimal_flux_and_error(
         The flux and its corresponding error.
     """
     
-    error = propagate_errors(
+    total_var = combine_variances(
         data=image,
         bias_var=bias_var,
         dark_var=dark_var,
@@ -875,15 +903,15 @@ def get_optimal_flux_and_error(
         )
     
     weights, norm = get_optimal_weights(
-        var=error**2,
+        var=total_var,
         position=position,
         psf_major=psf_params['semimajor_sigma'],
         psf_minor=psf_params['semiminor_sigma'],
         psf_orientation=psf_params['orientation'],
         )
     
-    flux = float(np.sum(image * weights) / norm)
-    flux_error = np.sqrt(1 / norm)
+    flux = np.sum(image * weights) / norm
+    flux_error = np.sqrt(1 / norm + (rel_scint_noise * flux)**2)
     
     return flux, flux_error
 
