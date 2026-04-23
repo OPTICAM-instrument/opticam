@@ -141,7 +141,7 @@ def match_dict_keys(
     return new_d
 
 
-def propagate_errors(
+def combine_variances(
     data: NDArray,
     bias_var: float | NDArray[np.float64],
     dark_var: float | NDArray[np.float64],
@@ -180,7 +180,7 @@ def propagate_errors(
     total_variance += dark_var
     total_variance += flat_var
     
-    return np.sqrt(total_variance)
+    return total_variance
 
 
 def camera_and_filter_key(
