@@ -2,6 +2,7 @@ from pathlib import Path
 
 
 from astropy.io import fits
+from astropy.io.fits import Header
 from ccdproc import cosmicray_lacosmic
 import numpy as np
 from numpy.typing import NDArray
@@ -69,10 +70,8 @@ def get_data(
     flat_corrector: FlatFieldCorrector | None = None,
     ) -> tuple[
         NDArray[np.float64],
-        float | NDArray[np.float64],
-        float | NDArray[np.float64],
-        float | NDArray[np.float64],
-        float,
+        Header,
+        dict[str, float | NDArray]
         ]:
     """
     Get the (calibrated) image data from a file.
@@ -96,15 +95,16 @@ def get_data(
     
     Returns
     -------
-    Tuple[NDArray[np.float64], float | NDArray[np.float64], float | NDArray[np.float64], float | NDArray[np.float64], float]
-        The corrected image, the master bias, dark, and flat variances, and the relative scintillation noise. If any of
-        the correctors are undefined, the variance of that corrector is set to 0.
+    Tuple[NDArray[np.float64], Header, dict[str, float | NDArray]]
+        The corrected image, the image header, and the noise dictionary.
     """
     
     data, header = file.get_data_and_header()
     camera = instrument.get_camera(header=header)
     fltr = instrument.get_filter(header=header)
     key = camera_and_filter_key(camera, fltr)
+    
+    noise_dict: dict[str, float | NDArray] = {}
     
     ################################################# bias correction #################################################
     
@@ -115,6 +115,8 @@ def get_data(
             )
     else:
         bias_var = 0.
+    
+    noise_dict['bias_var'] = bias_var
     
     ############################################## dark noise correction ##############################################
     
@@ -127,6 +129,8 @@ def get_data(
     else:
         dark_var = 0.
     
+    noise_dict['dark_var'] = dark_var
+    
     ############################################## flat-field correction ##############################################
     
     if flat_corrector is not None:
@@ -136,6 +140,8 @@ def get_data(
             )
     else:
         flat_var = 0.
+    
+    noise_dict['flat_var'] = flat_var
     
     ################################################# clip cosmic rays #################################################
     
@@ -147,7 +153,9 @@ def get_data(
     if rebin_factor > 1:
         data = rebin_image(data, rebin_factor)
     
-    return data, bias_var, dark_var, flat_var, instrument.get_relative_scintillation_noise(header=header)
+    noise_dict['rel_scint_noise'] = instrument.get_relative_scintillation_noise(header=header)
+    
+    return data, header, noise_dict
 
 
 def save_stacked_images(

@@ -1,6 +1,6 @@
 import os.path
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 
 from astropy import units as u
@@ -249,21 +249,24 @@ def plot_time_between_files(
         plt.close(fig)
 
 
-def plot_backgrounds(
+def plot_systematics(
     out_directory: Path,
     t_ref: float,
     show: bool,
     save: bool,
+    time_key: Literal['BMJD', 'MJD'] = 'BMJD',
     ) -> None:
     """
-    Plot the time-varying background for each camera.
+    Plot the time-varying systematics for each camera.
     
     Parameters
     ----------
     out_directory : Path
         The directory to which the background files, and where the resulting plot will be saved if `save=True`.
     t_ref : float
-        The reference BMJD.
+        The reference time.
+    time_key : Literal['BMJD', 'MJD'], optional
+        The time key, by default "BMJD".
     show: bool
         Whether to display the plot.
     save : bool
@@ -272,18 +275,18 @@ def plot_backgrounds(
     
     diag_files = os.listdir(os.path.join(out_directory, 'diag'))
     
-    background_files = {}
+    systematics_files = {}
     for file in diag_files:
-        if file.endswith('_background.csv'):
+        if file.endswith('_systematics.csv'):
             fltr = file.split('_')[0]
-            background_files[fltr] = os.path.join(out_directory, f'diag/{file}')
-    background_files = sort_dict_by_filters(background_files)
+            systematics_files[fltr] = os.path.join(out_directory, f'diag/{file}')
+    systematics_files = sort_dict_by_filters(systematics_files)
     
     fig, axes = plt.subplots(
-        nrows=2,
-        ncols=len(background_files),
+        nrows=5,
+        ncols=len(systematics_files),
         tight_layout=True,
-        figsize=(len(background_files) * 6.4, 1.5 * 4.8),
+        figsize=(len(systematics_files) * 6.4, 1.25 * 4.8),
         sharex='col',
         gridspec_kw={
             'hspace': 0,
@@ -291,32 +294,43 @@ def plot_backgrounds(
         )
     
     # for each camera
-    for i, (fltr, file) in enumerate(background_files.items()):
+    for i, (key, file) in enumerate(systematics_files.items()):
         df = pd.read_csv(file)
         
         # match times to background_median and background_rms keys
-        t = np.asarray(df['BMJD'].values)
+        t = np.asarray(df[time_key].values)
         plot_times = (t - t_ref) * 86400  # convert time to seconds from first observation
         
-        if len(background_files) == 1:
-            axes[0].set_title(fltr)
-            axes[0].plot(plot_times, df['median'].values, "k.", ms=2)
-            axes[1].plot(plot_times, df['rms'].values, "k.", ms=2)
+        if len(systematics_files) == 1:
+            axes[0].set_title(key)
+            axes[0].plot(plot_times, df['bkg_median'].values, "k.", ms=2)
+            axes[1].plot(plot_times, df['bkg_rms'].values, "k.", ms=2)
+            axes[2].plot(plot_times, df['airmass'].values, "k.", ms=2)
+            axes[3].plot(plot_times, df['FWHM'].values, "k.", ms=2)
+            axes[4].plot(plot_times, 100 * df['rel_scint_noise'].values, "k.", ms=2)
             
-            axes[1].set_xlabel(f"Time from BMJD {t_ref:.4f} [s]", fontsize='large')
-            axes[0].set_ylabel("Median background RMS", fontsize='large')
-            axes[1].set_ylabel("Median background", fontsize='large')
+            axes[-1].set_xlabel(f"Time from {time_key} {t_ref:.4f} [s]", fontsize='large')
+            axes[0].set_ylabel("BKG", fontsize='large')
+            axes[1].set_ylabel("RMS", fontsize='large')
+            axes[2].set_ylabel("Airmass", fontsize='large')
+            axes[3].set_ylabel("FWHM", fontsize='large')
+            axes[4].set_ylabel("$\\sigma_{\\rm scint}$ [%]", fontsize='large')
         else:
             # plot background
-            axes[0, i].set_title(fltr, fontsize='large')
-            axes[0, i].plot(plot_times, df['median'].values, "k.", ms=2)
-            axes[1, i].plot(plot_times, df['rms'].values, "k.", ms=2)
+            axes[0, i].set_title(key, fontsize='large')
+            axes[0, i].plot(plot_times, df['bkg_median'].values, "k.", ms=2)
+            axes[1, i].plot(plot_times, df['bkg_rms'].values, "k.", ms=2)
+            axes[2, i].plot(plot_times, df['airmass'].values, "k.", ms=2)
+            axes[3, i].plot(plot_times, df['FWHM'].values, "k.", ms=2)
+            axes[4, i].plot(plot_times, 100 * df['rel_scint_noise'].values, "k.", ms=2)
             
-            for col in range(len(background_files)):
-                axes[1, col].set_xlabel(f"Time from BMJD {t_ref:.4f} [s]", fontsize='large')
-            
-            axes[0, 0].set_ylabel("Median background", fontsize='large')
-            axes[1, 0].set_ylabel("Median background RMS", fontsize='large')
+            for col in range(len(systematics_files)):
+                axes[-1, col].set_xlabel(f"Time from {time_key} {t_ref:.4f} [s]", fontsize='large')
+                axes[0, col].set_ylabel("BKG", fontsize='large')
+                axes[1, col].set_ylabel("RMS", fontsize='large')
+                axes[2, col].set_ylabel("Airmass", fontsize='large')
+                axes[3, col].set_ylabel("FWHM", fontsize='large')
+                axes[4, col].set_ylabel("$\\sigma_{\\rm scint}$ [%]", fontsize='large')
     
     for ax in axes.flatten():
         ax.minorticks_on()
@@ -325,7 +339,7 @@ def plot_backgrounds(
     if save:
         save_figure(
             fig=fig,
-            path=out_directory / 'diag' / 'background.pdf',
+            path=out_directory / 'diag' / 'systematics.pdf',
             )
     
     if show:

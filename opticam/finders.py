@@ -1,3 +1,6 @@
+from typing import Callable
+
+
 from astropy.table import QTable
 import numpy as np
 from numpy.typing import NDArray
@@ -6,6 +9,7 @@ from photutils.segmentation import SourceCatalog, SourceFinder
 
 
 from opticam.background.global_background import BaseBackground
+from opticam.utils.constants import fwhm_scale
 
 
 
@@ -65,7 +69,9 @@ def get_source_coords_from_image(
     bkg: Background2D | None = None,
     n_sources: int | None = None,
     background: BaseBackground | None = None,
-    ) -> NDArray:
+    return_fwhm: bool = False,
+    aperture_selector: Callable[[NDArray[np.float64]], float] | None = None,
+    ) -> NDArray | tuple[NDArray, float]:
     """
     Get an array of source coordinates from an image in descending order of source brightness.
     
@@ -73,10 +79,21 @@ def get_source_coords_from_image(
     ----------
     image : NDArray
         The **non-background-subtracted** image from which to extract source coordinates.
+    finder : DefaultFinder
+        The source finder.
+    threshold : float | int
+        The source detection threshold in units of background RMS.
     bkg : Background2D, optional
-        The background of the image, by default None. If None, the background is estimated from the image.
+        The background of the image, by default `None`. If `None`, the background is estimated from the image.
     n_sources : int, optional
         The number of source coordinates to return, by default `None` (all sources will be returned).
+    background: BaseBackground | None, optional
+        The background estimator if `bkg = None`, by default `None`. Either `bkg` or `background` must be defined.
+    return_fwhm : bool, optional
+        Whether to return the average PSF FWHM of the image, by default `False`.
+    aperture_selector : Callable[[NDArray[np.float64]], float] | None, optional
+        The function to use to compute the average PSF FWHM, by default `None`. If a function is passed, it must take
+        an array of floats and return a float (e.g., `np.median`).
     
     Returns
     -------
@@ -97,6 +114,11 @@ def get_source_coords_from_image(
     
     if n_sources is not None:
         coords = coords[:n_sources]
+    
+    if return_fwhm:
+        fwhm = fwhm_scale * aperture_selector(tbl['semimajor_sigma'].value)
+        
+        return coords, fwhm
     
     return coords
 

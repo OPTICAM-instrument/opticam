@@ -31,7 +31,7 @@ from opticam.instruments import Instrument, OPTICAM_MX
 from opticam.mef_slice import MEFSlice
 from opticam.photometers import AperturePhotometer, BasePhotometer
 from opticam.plotting.gifs import compile_gif, create_gif_frame
-from opticam.plotting.plots import plot_backgrounds, plot_background_meshes, plot_catalogs, plot_growth_curves, \
+from opticam.plotting.plots import plot_systematics, plot_background_meshes, plot_catalogs, plot_growth_curves, \
     plot_time_between_files, plot_psf, plot_rms_vs_median_flux, plot_noise, plot_snrs, plot_apertures
 from opticam.utils.batching import get_batches, get_batch_size
 from opticam.utils.constants import bar_format
@@ -169,6 +169,11 @@ class Reducer:
         self.barycenter = barycenter
         self.number_of_processors = number_of_processors
         self.show_plots = show_plots
+        
+        if self.barycenter:
+            self.time_key = 'BMJD'
+        else:
+            self.time_key = 'MJD'
         
         ########################################### check input data ###########################################
         
@@ -489,7 +494,7 @@ class Reducer:
                 tqdm_class=tqdm,
                 )
             
-            self.transforms, self.unaligned_files, stacked_image, background = parse_alignment_results(
+            self.transforms, self.unaligned_files, stacked_image, systematics = parse_alignment_results(
                 results=results,
                 camera_files=self.camera_files[key],
                 transforms=self.transforms,
@@ -534,11 +539,9 @@ class Reducer:
                 catalog=self.catalogs[key],
                 )
             
-            save_background(
-                out_directory=self.out_directory,
-                background=background,
+            self.save_systematics(
+                systematics=systematics,
                 key=key,
-                bmjds=self.bmjds,
                 )
         
         log_psf_params(
@@ -563,9 +566,10 @@ class Reducer:
             overwrite=overwrite,
             )
         
-        plot_backgrounds(
+        plot_systematics(
             out_directory=self.out_directory,
             t_ref=self.t_ref,
+            time_key=self.time_key,
             show=self.show_plots,
             save=True,
             )
@@ -736,16 +740,16 @@ class Reducer:
         Returns
         -------
         tuple[NDArray[np.float64], dict[str, list[float]], dict[str, dict[str, float]], list[tuple[str, str]]]
-            The stacked image, transforms, background results, and log messages.
+            The stacked image, transforms, systematics, and log messages.
         """
         
         stacked_image = np.zeros(reference_image_shape)  # create empty stacked image
         transforms: dict[str, list[float]] = {}
-        bkg_dict: dict[str, dict[str, float]] = {}
+        systematics_dict: dict[str, dict[str, float]] = {}
         queued_logs: list[tuple[str, str]] = []
         
         for file in batch:
-            data = get_data(
+            data, header, noise_dict = get_data(
                 file=file,
                 instrument=self.instrument,
                 bias_corrector=self.bias_corrector,
@@ -753,18 +757,20 @@ class Reducer:
                 flat_corrector=self.flat_corrector,
                 rebin_factor=self.rebin_factor,
                 remove_cosmic_rays=self.remove_cosmic_rays,
-                )[0]
+                )
             
             # calculate and subtract background
             bkg = self.background(data)
             
             # identify sources
             try:
-                coords = get_source_coords_from_image(
+                coords, fwhm = get_source_coords_from_image(
                     data,
                     finder=self.finder,  # type: ignore
                     threshold=self.threshold,
                     bkg=bkg,
+                    return_fwhm=True,
+                    aperture_selector=self.aperture_selector,
                     )
             except Exception as e:
                 queued_logs.append(('error', f'No sources detected in {file.path} extension {file.ext}: {e} Skipping.'))
@@ -805,9 +811,12 @@ class Reducer:
                 continue
             
             transforms[file.key] = transform.params.tolist()
-            bkg_dict[file.key] = {
-                'Median': bkg.background_median,
-                'RMS': bkg.background_rms_median,
+            systematics_dict[file.key] = {
+                'bkg_median': bkg.background_median,
+                'bkg_rms': bkg.background_rms_median,
+                'FWHM': fwhm,
+                'airmass': self.instrument.get_airmass(header=header),
+                'rel_scint_noise': noise_dict['rel_scint_noise'],
                 }
             
             # transform and stack image
@@ -822,7 +831,7 @@ class Reducer:
                 preserve_range=True,
                 )
         
-        return stacked_image, transforms, bkg_dict, queued_logs
+        return stacked_image, transforms, systematics_dict, queued_logs
 
 
     def _valid_transform(
@@ -866,6 +875,36 @@ class Reducer:
                 return False, ('error', f'File {file.path} extension {file.ext} transform exceeded translation limit. Translation limit is {translation_limit}, but translation was {transform.translation}.')
         
         return True, None
+
+
+    def save_systematics(
+        self,
+        systematics: dict[str, dict[str, float]],
+        key: str,
+        ) -> None:
+        """
+        Save the systematics to a CSV file.
+        
+        Parameters
+        ----------
+        systematics : dict[Path, dict[str, float]]
+            The systematics for each file.
+        key : str
+            The camera:filter key.
+        """
+        
+        df = pd.DataFrame.from_dict(systematics, orient='index')
+        df.reset_index(inplace=True)
+        df.rename(columns={'index': 'file'}, inplace=True)
+        
+        time_df = pd.DataFrame.from_dict(self.bmjds, orient='index')
+        time_df.reset_index(inplace=True)
+        time_df.columns = ['file', self.time_key]
+        time_df.rename(columns={'index': 'file'}, inplace=True)
+        
+        merged_df = pd.merge(time_df, df, on='file', how='inner')  # merge dataframes to get corresponding times
+        merged_df.drop('file', axis=1, inplace=True)  # delete file column
+        merged_df.to_csv(os.path.join(self.out_directory, f'diag/{key}_systematics.csv'), index=False)
 
 
     def plot_background_meshes(
@@ -1284,7 +1323,7 @@ class Reducer:
             The photometry results.
         """
         
-        image, bias_var, dark_var, flat_var, rel_scint_noise = get_data(
+        image, header, noise_dict = get_data(
             file=file,
             instrument=self.instrument,
             bias_corrector=self.bias_corrector,
@@ -1316,22 +1355,18 @@ class Reducer:
         
         results = photometer.compute(
             image=image,
-            bias_var=bias_var,
-            dark_var=dark_var,
-            flat_var=flat_var,
+            bias_var=noise_dict['bias_var'],
+            dark_var=noise_dict['dark_var'],
+            flat_var=noise_dict['flat_var'],
             background_rms=background_rms,
             cat_coords=transformed_cat_coords,
             image_coords=image_coords,
             psf_params=self.psf_params[key],
             read_noise=self.instrument.get_read_noise(file=file),
-            rel_scint_noise=rel_scint_noise,
+            rel_scint_noise=noise_dict['rel_scint_noise'],
             )
         
-        # add time stamp
-        if self.barycenter:
-            results['BMJD'] = self.bmjds[file.key]
-        else:
-            results['MJD'] = self.bmjds[file.key]
+        results[self.time_key] = self.bmjds[file.key]
         
         return results
 
@@ -1422,22 +1457,21 @@ def parse_alignment_results(
     Returns
     -------
     tuple[dict[str, list[float]], list[str], NDArray, dict[str, float], dict[str, float]]
-        The updated transforms, unaligned files, stacked image, median background values and median background RMS
-        values.
+        The updated transforms, unaligned files, stacked image, and systematics.
     """
     
     key_transforms: dict[str, list[float]] = {}
     key_unaligned_files: list[MEFSlice] = []
-    key_background: dict[str, dict[str, float]] = {}
+    key_systematics: dict[str, dict[str, float]] = {}
     queued_logs: list[tuple[str, str]] = []
     
     # unpack results
-    batch_stacked_images, batch_transforms, batch_backgrounds, batch_queued_logs = zip(*results)
+    batch_stacked_images, batch_transforms, batch_systematics, batch_queued_logs = zip(*results)
     
     # combine results
     for i in range(len(batch_stacked_images)):
         key_transforms.update(batch_transforms[i])
-        key_background.update(batch_backgrounds[i])
+        key_systematics.update(batch_systematics[i])
         queued_logs += batch_queued_logs[i]
     
     # write log messages
@@ -1460,7 +1494,7 @@ def parse_alignment_results(
     logger.info(f'[OPTICAM] {len(key_transforms)} image(s) aligned.')
     logger.info(f'[OPTICAM] {len(key_unaligned_files)} image(s) could not be aligned.')
     
-    return transforms, unaligned_files, stacked_image, key_background
+    return transforms, unaligned_files, stacked_image, key_systematics
 
 
 def write_queued_logs(
@@ -1498,40 +1532,6 @@ def write_queued_logs(
                 logger.critical(message)
             else:
                 raise ValueError(f'[OPTICAM] Unrecognised log level {level}.')
-
-
-def save_background(
-    out_directory: Path,
-    background: dict[str, dict[str, float]],
-    key: str,
-    bmjds: dict[str, float],
-    ) -> None:
-    """
-    Save the median background and its RMS to a CSV file.
-    
-    Parameters
-    ----------
-    out_directory : Path
-        The output directory.
-    background : dict[Path, dict[str, float]]
-        The background values for each file.
-    key : str
-        The camera:filter key.
-    bmjds : dict[Path, float]
-        The BMJD values for each file {file path}.
-    """
-    
-    df = pd.DataFrame.from_dict(background, orient='index').reset_index()
-    df.columns = ['file', 'median', 'rms']
-    
-    time_df = pd.DataFrame.from_dict(bmjds, orient='index').reset_index()
-    time_df.columns = ['file', 'BMJD']
-    
-    merged_df = pd.merge(df, time_df, on='file', how='inner')  # merge dataframes to get corresponding times
-    merged_df = merged_df.drop('file', axis=1)  # delete file column
-    merged_df = merged_df.reindex(columns=['BMJD', 'median', 'rms'])  # reorder columns
-    
-    merged_df.to_csv(os.path.join(out_directory, f'diag/{key}_background.csv'), index=False)
 
 
 def save_unaligned_files(

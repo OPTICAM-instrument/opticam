@@ -13,7 +13,6 @@ from opticam.photometers import AperturePhotometer
 from opticam.utils.constants import counts_to_mag_factor
 from opticam.mef_slice import MEFSlice
 from opticam.utils.fits_handlers import get_data
-from opticam.utils.helpers import camera_and_filter_key
 
 
 
@@ -329,7 +328,7 @@ def get_noise_params(
     
     coords = np.asarray([catalog['xcentroid'], catalog['ycentroid']]).T
     
-    img, bias_var, dark_var, flat_var, rel_scint_noise = get_data(
+    img, header, noise_dict = get_data(
         file=file,
         instrument=instrument,
         bias_corrector=bias_corrector,
@@ -350,15 +349,15 @@ def get_noise_params(
     phot = AperturePhotometer()
     phot_results = phot.compute(
         image=img_clean,
-        bias_var=bias_var,
-        dark_var=dark_var,
-        flat_var=flat_var,
+        bias_var=noise_dict['bias_var'],
+        dark_var=noise_dict['dark_var'],
+        flat_var=noise_dict['flat_var'],
         background_rms=np.sqrt(n_sky),
         cat_coords=coords,
         image_coords=coords,
         psf_params=psf_params,
         read_noise=instrument.get_read_noise(file=file),
-        rel_scint_noise=rel_scint_noise,
+        rel_scint_noise=noise_dict['rel_scint_noise'],
         )
     
     # get the number of pixels in the aperture
@@ -367,12 +366,12 @@ def get_noise_params(
     fluxes = np.array(phot_results['flux'])
     flux_errs = np.array(phot_results['flux_err'])
     source_ids = np.arange(len(catalog)) + 1
-    scint_noise = rel_scint_noise * fluxes
+    scint_noise = noise_dict['rel_scint_noise'] * fluxes
     
     # mask unphysical flux values
     mask = fluxes > 1.
     
-    return source_ids[mask], fluxes[mask], flux_errs[mask], N_pix, n_sky, float(np.median(bias_var)), float(np.median(dark_var)), float(np.median(flat_var)), scint_noise
+    return source_ids[mask], fluxes[mask], flux_errs[mask], N_pix, n_sky, float(np.median(noise_dict['bias_var'])), float(np.median(noise_dict['dark_var'])), float(np.median(noise_dict['flat_var'])), scint_noise
 
 
 def get_snrs(
