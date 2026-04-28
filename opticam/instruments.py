@@ -15,7 +15,7 @@ import numpy as np
 
 
 from opticam.mef_slice import MEFSlice
-from opticam.utils.constants import counts_to_mag_factor
+from opticam.utils.helpers import compute_airmass
 
 
 
@@ -27,8 +27,8 @@ class Instrument(ABC):
     
     Parameters
     ----------
-    diameter : float | Quantity
-        The diameter of the telescope. If a `float`, the diameter is assumed to be in metres.
+    diameter : Quantity
+        The diameter of the telescope.
     location : EarthLocation
         The location of the observatory as an `astropy.coordinates.EarthLocation` object.
     pixel_scales : dict[str, float]
@@ -62,7 +62,7 @@ class Instrument(ABC):
     """
 
 
-    diameter: float | Quantity
+    diameter: Quantity
     location: EarthLocation
     pixel_scales: dict[str, float]
     airmass_kw: str = 'AIRMASS'
@@ -341,8 +341,8 @@ class Instrument(ABC):
         Parameters
         ----------
         file : MEFSlice | None, optional
-            The `MEFSlice` instance corresponding to the file, by default `None`. If `None`, a `Header` must be passed to
-            `header` instead.
+            The `MEFSlice` instance corresponding to the file, by default `None`. If `None`, a `Header` must be passed
+            to `header` instead.
         header : Header, optional
             The header of the FITS file, by default `None`. If `None`, a `MEFSlice` must be passed to `file` instead.
         
@@ -537,10 +537,7 @@ class Instrument(ABC):
         
         h = self.location.height.to_value(u.m)
         
-        if isinstance(self.diameter, Quantity):
-            D = self.diameter.to_value(u.m)
-        else:
-            D = self.diameter
+        D = self.diameter.to_value(u.m)
         
         H_value = H.to_value(u.m)
         
@@ -599,9 +596,13 @@ class Instrument(ABC):
             height=config['height'],
             )
         
+        diameter = config['diameter'] * u.m
+        
         return cls(
             location=location,
+            diameter=diameter,
             pixel_scales=config['pixel_scales'],
+            airmass_kw=config['airmass_kw'],
             read_noise_kw=config['read_noise_kw'],
             binning_kw=config['binning_kw'],
             dark_curr_kw=config['dark_curr_kw'],
@@ -644,7 +645,9 @@ class Instrument(ABC):
         template['longitude'] = self.location.lon.to_value(u.deg)
         template['latitude'] = self.location.lat.to_value(u.deg)
         template['height'] = self.location.height.to_value(u.m)
+        template['diameter'] = self.diameter.to_value(u.m),
         template['pixel_scales'] = self.pixel_scales
+        template['airmass_kw'] = self.airmass_kw
         template['read_noise_kw'] = self.read_noise_kw
         template['binning_kw'] = self.binning_kw
         template['dark_curr_kw'] = self.dark_curr_kw
@@ -702,14 +705,18 @@ def create_template() -> dict[str, Any]:
         'latitude': 0.0,
         '_latitude_description': 'The latitude of the observatory in degrees.',
         'height': 0.0,
-        '_height_description': 'The height of the observatory in meters.',
+        '_height_description': 'The height of the observatory in metres.',
+        'diameter': 0.0,
+        '_diameter_description': "The diameter of the telescope's aperture in metres.",
         'pixel_scales': {
-            'filter_1': 0.0,
-            'filter_2': 0.0,
+            'camera_1': 0.0,
+            'camera_2': 0.0,
             },
         '_pixel_scales_description': 'The pixel-scale in arcsec/pixel for each filter.',
+        'airmass_kw': 'AIRMASS',
+        '_airmass_kw_description': "The header keyword that corresponds to the observation's airmass.",
         'read_noise_kw': 'RDNOISE',
-        '_read_noise_description': "The header keyword that corresponds to the detector's readout noise in electrons/pixel.",
+        '_read_noise_kw_description': "The header keyword that corresponds to the detector's readout noise in electrons/pixel.",
         'binning_kw': 'BINNING',
         '_binning_kw_description': 'The header keyword that corresponds to the binning mode.',
         'dark_curr_kw': 'DARKCURR',
@@ -759,6 +766,45 @@ class OPTICAM_MX(Instrument):
             exptime_kw='EXPOSURE',
             dateobs_kw='UT',
             )
+
+
+    def get_airmass(
+        self,
+        file: MEFSlice | None = None,
+        header: Header | None = None,
+        ) -> float:
+        """
+        OPTICAM headers contain a fixed airmass. Here, we estimate the time-dependent airmass. If the airmass cannot be
+        estimate (e.g., due to missing coordinate info), the airmass is set to 0.
+        
+        Parameters
+        ----------
+        file : MEFSlice | None, optional
+            The `MEFSlice` instance corresponding to the file, by default `None`. If `None`, a `Header` must be passed
+            to `header` instead.
+        header : Header, optional
+            The header of the FITS file, by default `None`. If `None`, a `MEFSlice` must be passed to `file` instead.
+        
+        Returns
+        -------
+        float
+            The airmass of the image.
+        """
+        
+        if file is not None:
+            header: Header = file.get_header()
+        
+        try:
+            sky_coord = self.get_sky_coord(header=header)
+            time = Time(self.get_mjd(header=header), format='mjd')
+        except:
+            return 0.
+        
+        return float(compute_airmass(
+            coords=sky_coord,
+            times=time,
+            observatory=self.location,
+            ))
 
 
     def get_mjd(
@@ -822,7 +868,7 @@ class OPTICAM_MX(Instrument):
         header: Header | None = None,
         ) -> float:
         
-        return 1.1
+        return 1.3
 
 
     def get_relative_scintillation_noise(
