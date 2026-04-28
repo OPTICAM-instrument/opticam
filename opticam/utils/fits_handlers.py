@@ -64,6 +64,7 @@ def get_data(
     file: MEFSlice,
     instrument: Instrument,
     rebin_factor: int,
+    median_filter: bool,
     remove_cosmic_rays: bool,
     bias_corrector: BiasCorrector | None = None,
     dark_corrector: DarkNoiseCorrector | None = None,
@@ -84,6 +85,8 @@ def get_data(
         The instrument that created the file.
     rebin_factor : int
         The image rebinning factor.
+    median_filter : bool
+        Whether to apply a median filter when rebinning instead of the default summation.
     remove_cosmic_rays : bool
         Whether to remove cosmic rays from the image.
     bias_corrector : BiasCorrector | None, optional
@@ -151,7 +154,11 @@ def get_data(
     ###################################################### rebin ######################################################
     
     if rebin_factor > 1:
-        data = rebin_image(data, rebin_factor)
+        if median_filter:
+            method = 'median'
+        else:
+            method = 'sum'
+        data = rebin_image(data, rebin_factor, method=method)
     
     noise_dict['rel_scint_noise'] = instrument.get_relative_scintillation_noise(header=header)
     

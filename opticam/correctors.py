@@ -28,6 +28,7 @@ class Corrector(ABC):
         data_directory: Path | str | None = None,
         instrument: Instrument = OPTICAM_MX(),
         rebin_factor: int = 1,
+        median_filter: bool = False,
         *args,
         **kwargs,
         ) -> None:
@@ -46,6 +47,8 @@ class Corrector(ABC):
         rebin_factor : int, optional
             The factor by which to rebin the data, by default 1. Useful if, for example, calibration images were taken
             in a lower binning mode than the observations.
+        median_filter : bool, optional
+            Whether to apply a median filter when rebinning instead of the default summation, by default `False`.
         """
         
         self.out_directory = Path(out_directory) if out_directory is not None else None
@@ -54,6 +57,7 @@ class Corrector(ABC):
         
         assert isinstance(rebin_factor, int), "[OPTICAM] Non-integer rebin factors are not supported!"
         self.rebin_factor = rebin_factor
+        self.median_filter = median_filter
         
         if self.out_directory is not None:
             if not self.out_directory.is_dir():
@@ -342,7 +346,11 @@ class BiasCorrector(Corrector):
                 bias = bias_path.get_data()
                 
                 if self.rebin_factor > 1:
-                    bias = rebin_image(bias, self.rebin_factor)
+                    if self.median_filter:
+                        method = 'median'
+                    else:
+                        method = 'sum'
+                    bias = rebin_image(image=bias, factor=self.rebin_factor, method=method)
                 
                 biases.append(bias)
             
@@ -630,7 +638,11 @@ class DarkNoiseCorrector(Corrector):
                 dark = dark_file.get_data()
                 
                 if self.rebin_factor > 1:
-                    dark = rebin_image(dark, self.rebin_factor)
+                    if self.median_filter:
+                        method = 'median'
+                    else:
+                        method = 'sum'
+                    dark = rebin_image(image=dark, factor=self.rebin_factor, method=method)
                 
                 # apply bias correction
                 if self.bias_corrector is not None:
@@ -954,7 +966,11 @@ class FlatFieldCorrector(Corrector):
                 flat, header = flat_file.get_data_and_header()
                 
                 if self.rebin_factor > 1:
-                    flat = rebin_image(flat, self.rebin_factor)
+                    if self.median_filter:
+                        method = 'median'
+                    else:
+                        method = 'sum'
+                    flat = rebin_image(image=flat, factor=self.rebin_factor, method=method)
                 
                 if self.bias_corrector is not None:
                     flat, bias_var = self.bias_corrector.correct(
