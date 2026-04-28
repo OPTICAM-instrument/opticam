@@ -3,6 +3,8 @@ import re
 from typing import Any, Dict, List
 
 
+from astropy.coordinates import AltAz, EarthLocation, SkyCoord
+from astropy.time import Time
 import numpy as np
 from numpy.typing import NDArray
 from matplotlib.figure import Figure
@@ -150,7 +152,7 @@ def combine_variances(
     read_noise: float,
     ) -> NDArray[np.float64]:
     """
-    Compute the propagated error image.
+    Compute the propagated variance image.
     
     Parameters
     ----------
@@ -170,10 +172,10 @@ def combine_variances(
     Returns
     -------
     NDArray[np.float64]
-        The propagated error image.
+        The propagated variance image.
     """
     
-    total_variance = np.clip(data, 0., None)  # source shot noise
+    total_variance = np.clip(data, 0., None)  # shot noise
     total_variance += background_rms**2
     total_variance += read_noise**2
     total_variance += bias_var
@@ -271,4 +273,17 @@ def save_figure(
     print(f'[OPTICAM] Plot saved to {Path(path).resolve()}.')
 
 
+def compute_airmass(
+    coords: SkyCoord,
+    times: Time,
+    observatory: EarthLocation,
+    ) -> NDArray:
+    
+    altaz_frame = AltAz(obstime=times, location=observatory)
+    target_altaz = coords.transform_to(altaz_frame)
+    
+    alt_deg = target_altaz.alt.deg
+    airmass = 1 / np.sin(np.radians(alt_deg + 244 / (165 + 47 * alt_deg**1.1)))
+    
+    return airmass
 
