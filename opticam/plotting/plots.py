@@ -28,7 +28,7 @@ from opticam.utils.constants import catalog_colors, fwhm_scale
 from opticam.utils.helpers import save_figure
 from opticam.mef_slice import MEFSlice
 from opticam.timing.timeseries import get_lc
-from opticam.utils.helpers import sort_dict_by_filters
+from opticam.utils.helpers import camera_key, sort_dict_by_filters
 
 
 
@@ -251,6 +251,8 @@ def plot_time_between_files(
 
 def plot_systematics(
     out_directory: Path,
+    instrument: Instrument,
+    bin_factor: int,
     t_ref: float,
     show: bool,
     save: bool,
@@ -263,6 +265,11 @@ def plot_systematics(
     ----------
     out_directory : Path
         The directory to which the background files, and where the resulting plot will be saved if `save=True`.
+    instrument : Instrument
+        The instrument used to make the observation.
+    bin_factor : int
+        The effective binning factor of the image. This is the product of hardware pixel binning factor and the 
+        software pixel binning factor.
     t_ref : float
         The reference time.
     time_key : Literal['BMJD', 'MJD'], optional
@@ -278,59 +285,57 @@ def plot_systematics(
     systematics_files = {}
     for file in diag_files:
         if file.endswith('_systematics.csv'):
-            fltr = file.split('_')[0]
-            systematics_files[fltr] = os.path.join(out_directory, f'diag/{file}')
+            key = file.split('_')[0]
+            systematics_files[key] = os.path.join(out_directory, f'diag/{file}')
     systematics_files = sort_dict_by_filters(systematics_files)
     
     fig, axes = plt.subplots(
-        nrows=5,
+        nrows=4,
         ncols=len(systematics_files),
         tight_layout=True,
-        figsize=(len(systematics_files) * 6.4, 1.25 * 4.8),
+        figsize=( 2 / 3 * len(systematics_files) * 6.4, 1.6 * 4.8),
         sharex='col',
         gridspec_kw={
             'hspace': 0,
             },
         )
     
-    # for each camera
-    for i, (key, file) in enumerate(systematics_files.items()):
+    for col, (key, file) in enumerate(systematics_files.items()):
         df = pd.read_csv(file)
         
-        # match times to background_median and background_rms keys
         t = np.asarray(df[time_key].values)
-        plot_times = (t - t_ref) * 86400  # convert time to seconds from first observation
+        plot_times = (t - t_ref) * 86400
         
         if len(systematics_files) == 1:
-            axes[0].set_title(key)
+            axes[0].set_title(key, fontsize='large')
             axes[0].plot(plot_times, df['bkg_median'].values, "k.", ms=2)
             axes[1].plot(plot_times, df['bkg_rms'].values, "k.", ms=2)
-            axes[2].plot(plot_times, df['airmass'].values, "k.", ms=2)
-            axes[3].plot(plot_times, df['FWHM'].values, "k.", ms=2)
-            axes[4].plot(plot_times, 100 * df['rel_scint_noise'].values, "k.", ms=2)
+            axes[2].plot(plot_times, df['FWHM'].values * bin_factor * instrument.pixel_scales[camera_key(key)], "k.", ms=2)
+            axes[3].plot(plot_times, df['airmass'].values, "k.", ms=2)
+            # axes[4].plot(plot_times, 100 * df['rel_scint_noise'].values, "k.", ms=2)
             
+            # label plots
             axes[-1].set_xlabel(f"Time from {time_key} {t_ref:.4f} [s]", fontsize='large')
-            axes[0].set_ylabel("BKG", fontsize='large')
-            axes[1].set_ylabel("RMS", fontsize='large')
-            axes[2].set_ylabel("Airmass", fontsize='large')
-            axes[3].set_ylabel("FWHM", fontsize='large')
-            axes[4].set_ylabel("$\\sigma_{\\rm scint}$ [%]", fontsize='large')
+            axes[0].set_ylabel("BKG [e$^-$/pix]", fontsize='large')
+            axes[1].set_ylabel("$\\sigma_{\\rm BKG}$ [e$^-$/pix]", fontsize='large')
+            axes[2].set_ylabel("FWHM ['']", fontsize='large')
+            axes[3].set_ylabel("Airmass", fontsize='large')
+            # axes[4].set_ylabel("$\\sigma_{\\rm scint}$ [%]", fontsize='large')
         else:
-            # plot background
-            axes[0, i].set_title(key, fontsize='large')
-            axes[0, i].plot(plot_times, df['bkg_median'].values, "k.", ms=2)
-            axes[1, i].plot(plot_times, df['bkg_rms'].values, "k.", ms=2)
-            axes[2, i].plot(plot_times, df['airmass'].values, "k.", ms=2)
-            axes[3, i].plot(plot_times, df['FWHM'].values, "k.", ms=2)
-            axes[4, i].plot(plot_times, 100 * df['rel_scint_noise'].values, "k.", ms=2)
+            axes[0, col].set_title(key, fontsize='large')
+            axes[0, col].plot(plot_times, df['bkg_median'].values, "k.", ms=2)
+            axes[1, col].plot(plot_times, df['bkg_rms'].values, "k.", ms=2)
+            axes[2, col].plot(plot_times, df['FWHM'].values * bin_factor * instrument.pixel_scales[camera_key(key)], "k.", ms=2)
+            axes[3, col].plot(plot_times, df['airmass'].values, "k.", ms=2)
+            # axes[4, col].plot(plot_times, 100 * df['rel_scint_noise'].values, "k.", ms=2)
             
-            for col in range(len(systematics_files)):
-                axes[-1, col].set_xlabel(f"Time from {time_key} {t_ref:.4f} [s]", fontsize='large')
-                axes[0, col].set_ylabel("BKG", fontsize='large')
-                axes[1, col].set_ylabel("RMS", fontsize='large')
-                axes[2, col].set_ylabel("Airmass", fontsize='large')
-                axes[3, col].set_ylabel("FWHM", fontsize='large')
-                axes[4, col].set_ylabel("$\\sigma_{\\rm scint}$ [%]", fontsize='large')
+            # label plots
+            axes[-1, col].set_xlabel(f"Time from {time_key} {t_ref:.4f} [s]", fontsize='large')
+            axes[0, col].set_ylabel("BKG [e$^-$/pix]", fontsize='large')
+            axes[1, col].set_ylabel("$\\sigma_{\\rm BKG}$ [e$^-$/pix]", fontsize='large')
+            axes[2, col].set_ylabel("FWHM ['']", fontsize='large')
+            axes[3, col].set_ylabel("Airmass", fontsize='large')
+            # axes[4, col].set_ylabel("$\\sigma_{\\rm scint}$ [%]", fontsize='large')
     
     for ax in axes.flatten():
         ax.minorticks_on()
