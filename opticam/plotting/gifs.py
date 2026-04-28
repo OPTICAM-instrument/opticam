@@ -8,6 +8,7 @@ from astropy.visualization.mpl_normalize import simple_norm
 from matplotlib import pyplot as plt
 from matplotlib.patches import Circle
 import numpy as np
+from numpy.typing import NDArray
 from PIL import Image
 from skimage.transform import matrix_transform
 
@@ -31,6 +32,7 @@ def create_gif_frame(
     transforms: Dict[str, List[float]],
     reference_file: MEFSlice,
     rebin_factor: int,
+    image_filter: Callable[[NDArray[np.float64]], NDArray[np.float64]] | None,
     background: BaseBackground,
     ) -> None:
     """
@@ -56,6 +58,8 @@ def create_gif_frame(
         The `MEFSlice` instance representing the reference file.
     rebin_factor : int
         The image rebin factor.
+    image_filter : Callable[[NDArray[np.float64]], NDArray[np.float64]] | None
+        The kernel/filter to apply to the image.
     background : BaseBackground
         The background estimator.
     """
@@ -65,6 +69,7 @@ def create_gif_frame(
         instrument=instrument,
         dark_corrector=None,
         rebin_factor=rebin_factor,
+        image_filter=image_filter,
         remove_cosmic_rays=False,  # not required, disable for improved performance
         )[0]
     

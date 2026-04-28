@@ -29,12 +29,14 @@ from opticam.finders import DefaultFinder, get_source_coords_from_image
 from opticam.fitting.routines import fit_psf
 from opticam.instruments import Instrument, OPTICAM_MX
 from opticam.mef_slice import MEFSlice
+from opticam.noise import snr, snr_stderr, get_bias_stderr, get_dark_stderr, get_flat_stderr, get_read_stderr, \
+    get_scint_stderr, get_shot_stderr, get_sky_stderr
 from opticam.photometers import AperturePhotometer, BasePhotometer
 from opticam.plotting.gifs import compile_gif, create_gif_frame
 from opticam.plotting.plots import plot_systematics, plot_background_meshes, plot_catalogs, plot_growth_curves, \
     plot_time_between_files, plot_psf, plot_rms_vs_median_flux, plot_noise, plot_snrs, plot_apertures
 from opticam.utils.batching import get_batches, get_batch_size
-from opticam.utils.constants import bar_format
+from opticam.utils.constants import bar_format, counts_to_mag_factor
 from opticam.utils.data_checks import scan_data
 from opticam.utils.fits_handlers import get_data, get_stacked_images, save_stacked_images
 from opticam.utils.helpers import delete_keys_from_nested_dict, match_dict_keys
@@ -53,7 +55,7 @@ class Reducer:
         self,
         out_directory: Path | str,
         data_directory: Path | str,
-        aperture_selector: Callable = np.median,
+        aperture_selector: Callable[[NDArray[np.float64]], NDArray[np.float64]] = np.median,
         background: BaseBackground | None = None,
         barycenter: bool = True,
         bias_corrector: BiasCorrector | None = None,
@@ -63,7 +65,7 @@ class Reducer:
         instrument: Instrument = OPTICAM_MX(),
         number_of_processors: int = cpu_count() // 2,
         rebin_factor: int = 1,
-        median_filter: bool = False,
+        image_filter: Callable[[NDArray[np.float64]], NDArray[np.float64]] | None = None,
         remove_cosmic_rays: bool = False,
         show_plots: bool = True,
         threshold: float = 5,
@@ -109,11 +111,11 @@ class Reducer:
             The rebinning factor, by default 1 (no rebinning). The rebinning factor is the factor by which the image is
             rebinned in both dimensions. Rebinning can improve the detectability of faint sources and speed up
             some operations (like cosmic ray removal) at the cost of image resolution.
-        median_filter : bool, optional
-            Whether to apply a median filter when rebinning instead of the default summation, by default `False`.
-            Paez+2026: https://ui.adsabs.harvard.edu/abs/2026RASTI...5ag021P/abstract found that a 3x3 median filter
-            effectively corrects for warm pixels in long exposures (> 10 s) with OPTICAM. This parameter is only used
-            if `rebin_factor` is greater than 1.
+        image_filter : Callable[[NDArray[np.float64]], NDArray[np.float64]] | None, optional
+            The kernel/filter to apply to images as they are opened, by default `None`. Paez+2026:
+            https://ui.adsabs.harvard.edu/abs/2026RASTI...5ag021P/abstract found that a 3x3 median filter
+            (e.g., `scipy.ndimage.median_filter()`) can be used to correct for warm pixels in long exposures (> 10 s)
+            with OPTICAM.
         remove_cosmic_rays : bool, optional
             Whether to remove cosmic rays from images, by default `False`. Cosmic rays are removed using the LACosmic
             algorithm as implemented in `astroscrappy`. Note: this can be computationally expensive, particularly for
@@ -168,7 +170,7 @@ class Reducer:
         
         self.data_directory = Path(data_directory)
         self.rebin_factor = rebin_factor
-        self.median_filter = median_filter
+        self.image_filter = image_filter
         self.instrument = instrument
         self.aperture_selector = aperture_selector
         self.threshold = threshold
@@ -243,8 +245,8 @@ class Reducer:
         ########################################### define reference images ###########################################
         
         # define middle image as reference image for each filter
-        reference_indices = {}
-        self.reference_files = {}
+        reference_indices: dict[str, int] = {}
+        self.reference_files: dict[str, MEFSlice] = {}
         for key in self.camera_files.keys():
             reference_indices[key] = len(self.camera_files[key]) // 2
             self.reference_files[key] = self.camera_files[key][reference_indices[key]]
@@ -458,7 +460,7 @@ class Reducer:
                 dark_corrector=self.dark_corrector,
                 flat_corrector=self.flat_corrector,
                 rebin_factor=self.rebin_factor,
-                median_filter=self.median_filter,
+                image_filter=self.image_filter,
                 remove_cosmic_rays=self.remove_cosmic_rays,
                 )[0]
             
@@ -766,7 +768,7 @@ class Reducer:
                 dark_corrector=self.dark_corrector,
                 flat_corrector=self.flat_corrector,
                 rebin_factor=self.rebin_factor,
-                median_filter=self.median_filter,
+                image_filter=self.image_filter,
                 remove_cosmic_rays=self.remove_cosmic_rays,
                 )
             
@@ -1081,34 +1083,6 @@ class Reducer:
         )
 
 
-    def plot_noise(
-        self,
-        save: bool = False,
-        ) -> None:
-        """
-        Plot the noise characterisation for each reference image.
-        
-        Parameters
-        ----------
-        save : bool, optional
-            Whether to save the plot, by default 'False'.
-        """
-        
-        plot_noise(
-            out_directory=self.out_directory,
-            files=match_dict_keys(self.reference_files, self.catalogs),
-            background=self.background,
-            psf_params=self.psf_params,
-            catalogs=self.catalogs,
-            instrument=self.instrument,
-            bias_corrector=self.bias_corrector,
-            dark_corrector=self.dark_corrector,
-            flat_corrector=self.flat_corrector,
-            show=self.show_plots,
-            save=save,
-            )
-
-
     def create_gifs(
         self,
         keep_frames: bool = True,
@@ -1152,7 +1126,7 @@ class Reducer:
                     transforms=self.transforms,
                     reference_file=self.reference_files[key],
                     rebin_factor=self.rebin_factor,
-                    median_filter=self.median_filter,
+                    image_filter=self.image_filter,
                     background=self.background,
                     instrument=self.instrument,
                     ),
@@ -1222,7 +1196,7 @@ class Reducer:
                 dark_corrector=self.dark_corrector,
                 flat_corrector=self.flat_corrector,
                 rebin_factor=self.rebin_factor,
-                median_filter=self.median_filter,
+                image_filter=self.image_filter,
                 remove_cosmic_rays=self.remove_cosmic_rays,
                 )[0]
             
@@ -1343,7 +1317,7 @@ class Reducer:
             dark_corrector=self.dark_corrector,
             flat_corrector=self.flat_corrector,
             rebin_factor=self.rebin_factor,
-            median_filter=self.median_filter,
+            image_filter=self.image_filter,
             remove_cosmic_rays=self.remove_cosmic_rays,
             )
         
@@ -1409,6 +1383,227 @@ class Reducer:
             out_directory=self.out_directory,
             unaligned_files=self.unaligned_files,
         )
+
+
+    def plot_noise(
+        self,
+        save: bool = False,
+        ) -> None:
+        """
+        Plot the noise characterisation for each reference image.
+        
+        Parameters
+        ----------
+        save : bool, optional
+            Whether to save the plot, by default 'False'.
+        """
+        
+        noise_dicts = {}
+        
+        for key, file in self.reference_files.items():
+            noise_dicts[key] = self._characterise_noise(
+                file=file,
+                key=key,
+                )
+        
+        plot_noise(
+            out_directory=self.out_directory,
+            noise_dicts=noise_dicts,
+            show=self.show_plots,
+            save=save,
+            )
+
+
+    def _get_noise_params(
+        self,
+        file: MEFSlice,
+        key: str,
+        ) -> tuple[NDArray[np.int64], NDArray[np.float64], NDArray[np.float64], float, float, float, float, float, NDArray[np.float64]]:
+        """
+        Get the noise values of a science image.
+        
+        Parameters
+        ----------
+        file : MEFSlice
+            The science image file.
+        key : str
+            The camera:filter key.
+        
+        Returns
+        -------
+        tuple[NDArray[np.int64], NDArray[np.float64], NDArray[np.float64], float, float, float, float, float, NDArray[np.float64]]
+            The source IDs, fluxes, flux errors, number of aperture pixels, backgorund counts/pixel, bias variance, dark
+            variance, flat-field variance, and scintillation noise.
+        """
+        
+        coords = np.asarray([self.catalogs[key]['xcentroid'], self.catalogs[key]['ycentroid']]).T
+        
+        img, header, noise_dict = get_data(
+            file=file,
+            instrument=self.instrument,
+            image_filter=self.image_filter,
+            rebin_factor=self.rebin_factor,
+            bias_corrector=self.bias_corrector,
+            dark_corrector=self.dark_corrector,
+            flat_corrector=self.flat_corrector,
+            remove_cosmic_rays=False,
+            )
+        
+        # global background
+        bkg = self.background(img)
+        n_sky = float(bkg.background_rms_median**2)  # background variance
+        
+        # subtract background from image
+        img_clean = img - bkg.background
+        
+        # perform photometry
+        phot = AperturePhotometer()
+        phot_results = phot.compute(
+            image=img_clean,
+            bias_var=noise_dict['bias_var'],
+            dark_var=noise_dict['dark_var'],
+            flat_var=noise_dict['flat_var'],
+            background_rms=np.sqrt(n_sky),
+            cat_coords=coords,
+            image_coords=coords,
+            psf_params=self.psf_params[key],
+            read_noise=self.instrument.get_read_noise(header=header),
+            rel_scint_noise=noise_dict['rel_scint_noise'],
+            )
+        
+        # get the number of pixels in the aperture
+        N_pix = phot.get_aperture_area(psf_params=self.psf_params[key])
+        
+        fluxes = np.array(phot_results['flux'])
+        flux_errs = np.array(phot_results['flux_err'])
+        source_ids = np.arange(len(self.catalogs[key])) + 1
+        scint_noise = noise_dict['rel_scint_noise'] * fluxes
+        
+        # mask unphysical flux values
+        mask = fluxes > 1.
+        
+        return source_ids[mask], fluxes[mask], flux_errs[mask], N_pix, n_sky, float(np.median(noise_dict['bias_var'])), float(np.median(noise_dict['dark_var'])), float(np.median(noise_dict['flat_var'])), scint_noise
+
+
+    def get_snrs(
+        self,
+        file: MEFSlice,
+        key: str,
+        ) -> tuple[NDArray, NDArray]:
+        """
+        Get the S/N ratios for the cataloged sources in a science image.
+        
+        Parameters
+        ----------
+        file : MEFSlice
+            The science image file.
+        key : str
+            The camera:filter key.
+        
+        Returns
+        -------
+        tuple[NDArray, NDArray]
+            The source IDs and S/N for each source.
+        """
+        
+        source_ids, fluxes, flux_errs, N_pix, n_sky, bias_var, dark_var, flat_var, scint_noise = self._get_noise_params(
+            key=key,
+            file=file,
+        )
+        
+        return source_ids, np.asarray(
+            snr(
+                N_source=fluxes,
+                N_pix=N_pix,
+                n_sky=n_sky,
+                bias_var=bias_var,
+                dark_var=dark_var,
+                flat_var=flat_var,
+                read_noise=self.instrument.get_read_noise(file=file),
+                scint_noise=scint_noise,
+                )
+            )
+
+
+    def _characterise_noise(
+        self,
+        file: MEFSlice,
+        key: str,
+        ) -> dict[str, NDArray]:
+        """
+        Characterise the expected noise from an image and compare it to the measured noise for a number of cataloged 
+        sources.
+        
+        Parameters
+        ----------
+        file : MEFSlice
+            The science image file.
+        key : str
+            The camera:filter key.
+        
+        Returns
+        -------
+        dict[str, NDArray]
+            The noies properties.
+        """
+        
+        header = file.get_header()
+        
+        read_noise = self.instrument.get_read_noise(header=header)
+        rel_scint_noise = self.instrument.get_relative_scintillation_noise(header=header)
+        
+        source_ids, fluxes, flux_errs, N_pix, n_sky, bias_var, dark_var, flat_var, scint_noise = self._get_noise_params(
+            file=file,
+            key=key,
+        )
+        
+        N_source = np.logspace(
+            np.log10(np.min(fluxes) / 1.5),
+            np.log10(np.max(fluxes) * 1.5),
+            100,
+            )
+        
+        results = {}
+        
+        results['model_mags'] = -2.5 * np.log10(N_source)
+        results['effective_noise'] = snr_stderr(
+            N_source=N_source,
+            N_pix=N_pix,
+            n_sky=n_sky,
+            bias_var=bias_var,
+            dark_var=dark_var,
+            flat_var=flat_var,
+            read_noise=read_noise,
+            rel_scint_noise=rel_scint_noise,
+            )
+        results['sky_noise'] = get_sky_stderr(
+            N_source=N_source,
+            N_pix=N_pix,
+            n_sky=n_sky,
+            )
+        results['shot_noise'] = get_shot_stderr(N_source=N_source)
+        results['bias'] = get_bias_stderr(
+            N_source=N_source,
+            N_pix=N_pix, bias_var=bias_var)
+        results['dark_noise'] = get_dark_stderr(N_source, N_pix, dark_var)
+        results['flat'] = get_flat_stderr(N_source, N_pix, flat_var)
+        results['read_noise'] = get_read_stderr(N_source, N_pix, read_noise=read_noise)
+        results['scint_noise'] = get_scint_stderr(N_source=N_source, rel_scint_noise=rel_scint_noise)
+        
+        results['measured_mags'] = -2.5 * np.log10(fluxes)
+        results['measured_noise'] = counts_to_mag_factor * flux_errs / fluxes
+        results['expected_measured_noise'] = snr_stderr(
+            N_source=fluxes,
+            N_pix=N_pix,
+            n_sky=n_sky,
+            bias_var=bias_var,
+            dark_var=dark_var,
+            flat_var=flat_var,
+            read_noise=read_noise,
+            rel_scint_noise=rel_scint_noise,
+            )
+        
+        return results
 
 
 

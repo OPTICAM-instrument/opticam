@@ -1,4 +1,6 @@
+import os.path
 from pathlib import Path
+from typing import Callable
 
 
 from astropy.io import fits
@@ -6,7 +8,6 @@ from astropy.io.fits import Header
 from ccdproc import cosmicray_lacosmic
 import numpy as np
 from numpy.typing import NDArray
-import os.path
 
 
 from opticam.correctors import BiasCorrector, DarkNoiseCorrector, FlatFieldCorrector
@@ -64,7 +65,7 @@ def get_data(
     file: MEFSlice,
     instrument: Instrument,
     rebin_factor: int,
-    median_filter: bool,
+    image_filter: Callable[[NDArray[np.float64]], NDArray[np.float64]] | None,
     remove_cosmic_rays: bool,
     bias_corrector: BiasCorrector | None = None,
     dark_corrector: DarkNoiseCorrector | None = None,
@@ -85,8 +86,8 @@ def get_data(
         The instrument that created the file.
     rebin_factor : int
         The image rebinning factor.
-    median_filter : bool
-        Whether to apply a median filter when rebinning instead of the default summation.
+    image_filter : Callable[[NDArray[np.float64]], NDArray[np.float64]] | None
+        The filter to apply to the image as it is opened.
     remove_cosmic_rays : bool
         Whether to remove cosmic rays from the image.
     bias_corrector : BiasCorrector | None, optional
@@ -106,6 +107,9 @@ def get_data(
     camera = instrument.get_camera(header=header)
     fltr = instrument.get_filter(header=header)
     key = camera_and_filter_key(camera, fltr)
+    
+    if image_filter is not None:
+        data = image_filter(data)
     
     noise_dict: dict[str, float | NDArray] = {}
     
@@ -154,11 +158,7 @@ def get_data(
     ###################################################### rebin ######################################################
     
     if rebin_factor > 1:
-        if median_filter:
-            method = 'median'
-        else:
-            method = 'sum'
-        data = rebin_image(data, rebin_factor, method=method)
+        data = rebin_image(image=data, factor=rebin_factor)
     
     noise_dict['rel_scint_noise'] = instrument.get_relative_scintillation_noise(header=header)
     

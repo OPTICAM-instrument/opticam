@@ -20,7 +20,6 @@ from photutils.aperture import ApertureStats, BoundingBox
 from opticam.background.global_background import BaseBackground
 from opticam.correctors import BiasCorrector, DarkNoiseCorrector, FlatFieldCorrector
 from opticam.instruments import Instrument
-from opticam.noise import characterise_noise, get_snrs
 from opticam.photometers import AperturePhotometer, get_growth_curve
 from opticam.fitting.models import gaussian
 from opticam.fitting.routines import fit_rms_vs_flux
@@ -1002,14 +1001,7 @@ def plot_snrs(
 
 def plot_noise(
     out_directory: Path,
-    files: dict[str, MEFSlice],
-    background: BaseBackground | Callable,
-    psf_params: dict[str, dict[str, float]],
-    catalogs: dict[str, QTable],
-    instrument: Instrument,
-    bias_corrector: BiasCorrector | None,
-    dark_corrector: DarkNoiseCorrector,
-    flat_corrector: FlatFieldCorrector | None,
+    noise_dicts: dict[str, dict[str, NDArray[np.float64]]],
     show: bool,
     save: bool,
     ):
@@ -1020,29 +1012,15 @@ def plot_noise(
     ----------
     out_directory : Path
         The output directory.
-    files : dict[str, MEFSlice]
-        The reference files for each filter.
-    background : BaseBackground | Callable
-        The global background estimator.
-    psf_params : dict[str, dict[str, float]]
-        The PSF parameters for each filter {filter: psf parameters}.
-    catalogs : dict[str, QTable]
-        The catalogs for each filter {filter: catalog}.
-    instrument : Instrument
-        The instrument that produced the data.
-    bias_corrector : BiasCorrector | None
-        The bias corrector.
-    dark_corrector : DarkNoiseCorrector
-        The dark noise corrector.
-    flat_corrector : FlatFieldCorrector | None
-        The flat-field corrector.
+    noise_dicts : dict[str, dict[str, NDArray[np.float64]]]
+        The noise dictionaries for each camera.
     show : bool
         Whether to show the plot.
     save : bool
         Whether to save the plot.
     """
     
-    ncols: int = len(files)
+    ncols: int = len(noise_dicts)
     
     fig, axes = plt.subplots(
         ncols=ncols,
@@ -1059,18 +1037,7 @@ def plot_noise(
         figsize=(2 / 3 * ncols * 6.4, 4.8),
         )
     
-    for i, (fltr, file) in enumerate(files.items()):
-        
-        results = characterise_noise(
-            file=file,
-            background=background,
-            catalog=catalogs[fltr],
-            psf_params=psf_params[fltr],
-            instrument=instrument,
-            bias_corrector=bias_corrector,
-            dark_corrector=dark_corrector,
-            flat_corrector=flat_corrector,
-            )
+    for i, (key, results) in enumerate(noise_dicts.items()):
         
         axes[0][i].plot(results['model_mags'], results['effective_noise'], label='Effective noise', c='k', lw=1, zorder=3)
         
@@ -1145,7 +1112,7 @@ def plot_noise(
                 )
         
         axes[0][i].set_yscale('log')
-        axes[0][i].set_title(fltr, fontsize='large')
+        axes[0][i].set_title(key, fontsize='large')
         
         axes[1][i].set_xlabel('-2.5 log(counts)', fontsize='large')
     
