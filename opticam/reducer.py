@@ -63,6 +63,7 @@ class Reducer:
         instrument: Instrument = OPTICAM_MX(),
         number_of_processors: int = cpu_count() // 2,
         rebin_factor: int = 1,
+        median_filter: bool = False,
         remove_cosmic_rays: bool = False,
         show_plots: bool = True,
         threshold: float = 5,
@@ -108,6 +109,11 @@ class Reducer:
             The rebinning factor, by default 1 (no rebinning). The rebinning factor is the factor by which the image is
             rebinned in both dimensions. Rebinning can improve the detectability of faint sources and speed up
             some operations (like cosmic ray removal) at the cost of image resolution.
+        median_filter : bool, optional
+            Whether to apply a median filter when rebinning instead of the default summation, by default `False`.
+            Paez+2026: https://ui.adsabs.harvard.edu/abs/2026RASTI...5ag021P/abstract found that a 3x3 median filter
+            effectively corrects for warm pixels in long exposures (> 10 s) with OPTICAM. This parameter is only used
+            if `rebin_factor` is greater than 1.
         remove_cosmic_rays : bool, optional
             Whether to remove cosmic rays from images, by default `False`. Cosmic rays are removed using the LACosmic
             algorithm as implemented in `astroscrappy`. Note: this can be computationally expensive, particularly for
@@ -162,6 +168,7 @@ class Reducer:
         
         self.data_directory = Path(data_directory)
         self.rebin_factor = rebin_factor
+        self.median_filter = median_filter
         self.instrument = instrument
         self.aperture_selector = aperture_selector
         self.threshold = threshold
@@ -451,6 +458,7 @@ class Reducer:
                 dark_corrector=self.dark_corrector,
                 flat_corrector=self.flat_corrector,
                 rebin_factor=self.rebin_factor,
+                median_filter=self.median_filter,
                 remove_cosmic_rays=self.remove_cosmic_rays,
                 )[0]
             
@@ -568,6 +576,8 @@ class Reducer:
         
         plot_systematics(
             out_directory=self.out_directory,
+            instrument=self.instrument,
+            bin_factor=self.binning_scale * self.rebin_factor,
             t_ref=self.t_ref,
             time_key=self.time_key,
             show=self.show_plots,
@@ -756,6 +766,7 @@ class Reducer:
                 dark_corrector=self.dark_corrector,
                 flat_corrector=self.flat_corrector,
                 rebin_factor=self.rebin_factor,
+                median_filter=self.median_filter,
                 remove_cosmic_rays=self.remove_cosmic_rays,
                 )
             
@@ -1141,6 +1152,7 @@ class Reducer:
                     transforms=self.transforms,
                     reference_file=self.reference_files[key],
                     rebin_factor=self.rebin_factor,
+                    median_filter=self.median_filter,
                     background=self.background,
                     instrument=self.instrument,
                     ),
@@ -1210,6 +1222,7 @@ class Reducer:
                 dark_corrector=self.dark_corrector,
                 flat_corrector=self.flat_corrector,
                 rebin_factor=self.rebin_factor,
+                median_filter=self.median_filter,
                 remove_cosmic_rays=self.remove_cosmic_rays,
                 )[0]
             
@@ -1330,6 +1343,7 @@ class Reducer:
             dark_corrector=self.dark_corrector,
             flat_corrector=self.flat_corrector,
             rebin_factor=self.rebin_factor,
+            median_filter=self.median_filter,
             remove_cosmic_rays=self.remove_cosmic_rays,
             )
         
@@ -1346,9 +1360,10 @@ class Reducer:
         image_coords = None  # assume no image coordinates by default
         if not photometer.forced:
             tbl = self.finder(image, threshold)
-            image_coords = np.array([tbl["xcentroid"].value,
-                                    tbl["ycentroid"].value],
-                                    ).T
+            image_coords = np.array([
+                tbl["xcentroid"].value,
+                tbl["ycentroid"].value,
+                ]).T
         
         # apply transform to catalogue coordinates
         transformed_cat_coords = matrix_transform(cat_coords, self.transforms[file.key])
