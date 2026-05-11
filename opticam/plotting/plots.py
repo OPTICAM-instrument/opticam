@@ -887,17 +887,10 @@ def get_lc_rms_and_flux_dict(
 
 def plot_snrs(
     out_directory: Path,
-    files: dict[str, MEFSlice],
-    background: BaseBackground | Callable,
-    psf_params: dict[str, dict[str, float]],
-    catalogs: dict[str, QTable],
-    instrument: Instrument,
-    bias_corrector: BiasCorrector | None,
-    dark_corrector: DarkNoiseCorrector | None,
-    flat_corrector: FlatFieldCorrector | None,
+    snrs: dict[str, dict[int, float]],
     show: bool,
     save: bool,
-    ):
+    ) -> None:
     """
     Plot the S/N for each source.
     
@@ -905,29 +898,15 @@ def plot_snrs(
     ----------
     out_directory : Path
         The output directory.
-    files : dict[str, MEFSlice]
-        The reference file for each filter.
-    background : BaseBackground | Callable
-        The global background estimator.
-    psf_params : dict[str, dict[str, float]]
-        The PSF parameters for each filter {filter: psf parameters}.
-    catalogs : dict[str, QTable]
-        The catalogs for each filter {filter: catalog}.
-    instrument : Instrument
-        The instrument that produced the data.
-    bias_corrector : BiasCorrector | None
-        The bias corrector.
-    dark_corrector : DarkNoiseCorrector | None
-        The dark noise corrector.
-    flat_corrector : FlatFieldCorrector | None
-        The flat-field corrector.
+    snrs : dict[str, dict[int, float]]
+        The S/N for each source in each catalog.
     show : bool
         Whether to show the plot.
     save : bool
         Whether to save the plot.
     """
     
-    ncols: int = len(files)
+    ncols: int = len(snrs)
     
     fig, axes = plt.subplots(
         ncols=ncols,
@@ -939,24 +918,10 @@ def plot_snrs(
     if ncols == 1:
         axes = [axes]
     
-    for i, (fltr, file) in enumerate(files.items()):
-        
-        source_ids, snrs = np.round(
-            get_snrs(
-                file=file,
-                background=background,
-                catalog=catalogs[fltr],
-                psf_params=psf_params[fltr],
-                instrument=instrument,
-                bias_corrector=bias_corrector,
-                dark_corrector=dark_corrector,
-                flat_corrector=flat_corrector,
-                ),
-            1,
-            )
+    for i, (key, snr_dict) in enumerate(snrs.items()):
         
         axes[i].set_title(
-            fltr,
+            key,
             fontsize='large',
             )
         axes[i].set_xlabel(
@@ -969,8 +934,8 @@ def plot_snrs(
             )
         
         p = axes[i].bar(
-            source_ids,
-            snrs,
+            snr_dict.keys(),
+            snr_dict.values(),
             facecolor='none',
             edgecolor='k',
             lw=1,

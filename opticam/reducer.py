@@ -1068,16 +1068,16 @@ class Reducer:
             Whether to save the plot, by default `False`.
         """
         
+        snrs: dict[str, dict[int, float]] = {}
+        for key in self.camera_files.keys():
+            snrs[key] = self.get_snrs(
+                file=self.reference_files[key],
+                key=key,
+                )
+        
         plot_snrs(
             out_directory=self.out_directory,
-            files=match_dict_keys(self.reference_files, self.catalogs),
-            background=self.background,
-            psf_params=self.psf_params,
-            catalogs=self.catalogs,
-            instrument=self.instrument,
-            bias_corrector=self.bias_corrector,
-            dark_corrector=self.dark_corrector,
-            flat_corrector=self.flat_corrector,
+            snrs=snrs,
             show=self.show_plots,
             save=save,
         )
@@ -1489,7 +1489,7 @@ class Reducer:
         self,
         file: MEFSlice,
         key: str,
-        ) -> tuple[NDArray, NDArray]:
+        ) -> dict[int, float]:
         """
         Get the S/N ratios for the cataloged sources in a science image.
         
@@ -1502,8 +1502,8 @@ class Reducer:
         
         Returns
         -------
-        tuple[NDArray, NDArray]
-            The source IDs and S/N for each source.
+        dict[int, float]
+            The source ID (key) and S/N (value) for each source.
         """
         
         source_ids, fluxes, flux_errs, N_pix, n_sky, bias_var, dark_var, flat_var, scint_noise = self._get_noise_params(
@@ -1511,7 +1511,7 @@ class Reducer:
             file=file,
         )
         
-        return source_ids, np.asarray(
+        snrs = np.asarray(
             snr(
                 N_source=fluxes,
                 N_pix=N_pix,
@@ -1523,6 +1523,10 @@ class Reducer:
                 scint_noise=scint_noise,
                 )
             )
+        
+        results = {source_id: round(snr, 1) for source_id, snr in zip(source_ids, snrs)}
+        
+        return results
 
 
     def _characterise_noise(
