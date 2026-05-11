@@ -275,6 +275,7 @@ def create_images(
         hdu.header["EXPOSURE"] = 1.
         hdu.header["DARKCURR"] = 0.
         hdu.header["INSTRUME"] = 'OPTICAM'
+        hdu.header["AIRMASS"] = 1
         
         # create observation pointing
         hdu.header['RA'] = 0.
@@ -369,6 +370,7 @@ def create_flats(
         hdu.header["BINNING"] = f'{binning_scale}x{binning_scale}'
         hdu.header["GAIN"] = 1.
         hdu.header["INSTRUME"] = 'OPTICAM'
+        hdu.header["AIRMASS"] = 1
         
         # create observation time
         hh = str(i // 3600).zfill(2)
