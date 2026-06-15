@@ -73,7 +73,7 @@ def create_gif_frame(
         remove_cosmic_rays=False,  # not required, disable for improved performance
         )[0]
     
-    file_name = file.path.name
+    file_name = f'{file.path.name} ext {file.ext}'
     
     bkg = background(data)
     clean_data = data - bkg.background
