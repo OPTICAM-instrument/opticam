@@ -9,6 +9,7 @@ from typing import Callable, Literal
 
 from astroalign import find_transform
 from astropy import units as u
+from astropy.io.fits import Header
 from astropy.table import QTable
 from matplotlib import pyplot as plt
 from matplotlib.figure import Figure
@@ -286,6 +287,19 @@ class Reducer:
         ########################################### log input params ###########################################
         
         self._log_params()
+        
+        ####################################### define convenience methods #######################################
+        
+        self.get_data: Callable[[MEFSlice], tuple[NDArray[np.float64], Header, dict[str, float | NDArray[np.float64]]]] = partial(
+            get_data,
+            instrument=self.instrument,
+            rebin_factor=self.rebin_factor,
+            image_filter=self.image_filter,
+            remove_cosmic_rays=self.remove_cosmic_rays,
+            bias_corrector=self.bias_corrector,
+            dark_corrector=self.dark_corrector,
+            flat_corrector=self.flat_corrector,
+            )
         
         ########################################### misc attributes ###########################################
         
@@ -598,14 +612,20 @@ class Reducer:
             )
 
 
-    def pick_sources(self, percentile: float = 99.0):
+    def pick_sources(
+        self,
+        percentile: float = 99.0,
+        region_size: int | None = None,
+        ):
         """
         Interactive plot for manually adding sources to the catalogs.
         
         Parameters
         ----------
         percentile: float, optional
-            The percentile to use for plotting source catalogues, by default `99.0`.
+            The interval percentile for image normalisation, by default `99.0`.
+        region_size : int | None, optional
+            The size of the region used to refine source coordinates, by default `None`. If `None`, the region size is set to the image width divided by 32.
         
         Returns
         -------
@@ -622,19 +642,25 @@ class Reducer:
             out_directory=self.out_directory,
             stacked_images=stacked_images,
             catalogs=self.catalogs,
-            show=self.show_plots,
+            show=False,
             save=False,
             percentile=percentile,
             return_fig=True,
             )
         
+        if region_size is None:
+            region_size = max(list(stacked_images.values())[0].shape) // 64
+        
         add_source = partial(
             self._add_source,
             fig=fig,
             stacked_images=stacked_images,
+            region_size=region_size,
             )
         
         fig.canvas.mpl_connect('button_press_event', add_source)
+        
+        plt.show()
 
 
     def _add_source(
@@ -642,6 +668,7 @@ class Reducer:
         event: Literal['button_press_event'],
         fig: Figure,
         stacked_images: dict[str, NDArray],
+        region_size: int,
         ) -> None:
         """
         Add a manually-picked source to the associated catalog.
@@ -654,6 +681,8 @@ class Reducer:
             The catalog plot.
         stacked_images : dict[str, NDArray]
             The catalog images.
+        region_size : int | None, optional
+            The size of the region used to refine source coordinates.
         """
         
         if event.inaxes is None:
@@ -667,8 +696,7 @@ class Reducer:
         int_x, int_y = int(x), int(y)
         
         # get a small region around the clicked coordinates
-        region_width = min(stacked_images[key].shape) // 32
-        region = stacked_images[key][int_y-region_width:int_y+region_width, int_x-region_width:int_x+region_width]
+        region = stacked_images[key][int_y-region_size:int_y+region_size, int_x-region_size:int_x+region_size]
         
         # get peak flux coordinates in region
         # this is the initial guess for our source position
@@ -684,8 +712,8 @@ class Reducer:
             )
         
         # convert region coordinates to image coordinates
-        x_image = x_region + x - region_width
-        y_image = y_region + y - region_width
+        x_image = x_region + x - region_size
+        y_image = y_region + y - region_size
         
         # add minimally required information for chosen source to catalog
         new_row = {
@@ -703,7 +731,7 @@ class Reducer:
         
         patch = Circle(
             (x_image, y_image),
-            region_width,
+            region_size,
             edgecolor='r',
             facecolor='none',
             )
@@ -934,13 +962,15 @@ class Reducer:
             Whether to save the plot, by default `False`.
         """
         
-        try:
+        catalogs = True
+        for key in self.camera_files.keys():
+            if key not in self.catalogs.keys():
+                catalogs = False
+        
+        if catalogs:
             images = get_stacked_images(self.out_directory)
-        except FileNotFoundError:
-            images = get_random_image_for_each_filter(
-                self.camera_files,
-                instrument=self.instrument,
-                )
+        else:
+            images = self.get_random_image_for_each_filter()
             
             # subtract background
             for label, image in images.items():
@@ -954,6 +984,29 @@ class Reducer:
             show=self.show_plots,
             save=save,
             )
+
+
+    def get_random_image_for_each_filter(
+        self,
+        ) -> dict[str, NDArray]:
+        """
+        Choose a random image for each filter from a dictionary.
+        
+        Returns
+        -------
+        dict[str, NDArray]
+            A dictionary containing a random image for each filter
+        """
+        
+        rng = np.random.default_rng()
+        images = {}
+        
+        for files in self.camera_files.values():
+            file = files[rng.choice(len(files))]  # choose a random file
+            key = f'{file.path.name} ext {file.ext}'
+            images[key] = self.get_data(file)[0]
+        
+        return images
 
 
     def plot_growth_curves(
@@ -1767,42 +1820,6 @@ def save_unaligned_files(
         with open(os.path.join(out_directory, "diag/unaligned_files.txt"), "w") as unaligned_file:
             for file in unaligned_files:
                 unaligned_file.write(str(file.key) + "\n")
-
-
-def get_random_image_for_each_filter(
-    camera_files: dict[str, list[MEFSlice]],
-    instrument: Instrument,
-    ) -> dict[str, NDArray]:
-    """
-    Choose a random image for each filter from a dictionary.
-    
-    Parameters
-    ----------
-    camera_files : dict[str, list[Path]]
-        The filters and corresponding files in the data directory {filter: [paths to images]}.
-    instrument : Instrument
-        The instrument.
-    
-    Returns
-    -------
-    dict[str, NDArray]
-        A dictionary containing a random file for each filter
-    """
-    
-    rng = np.random.default_rng()
-    images = {}
-    
-    for files in camera_files.values():
-        file = files[rng.choice(len(files))]  # choose a random file
-        file_name = file.path.name
-        images[file_name] = get_data(
-            file=file,
-            instrument=instrument,
-            rebin_factor=1,
-            remove_cosmic_rays=False,
-            )[0]
-    
-    return images
 
 
 def create_targets_dict(
