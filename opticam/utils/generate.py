@@ -219,7 +219,7 @@ def create_images(
     """
     
     for fltr in FILTERS:
-        save_path = out_directory.joinpath(f'240101{fltr}{200000000 + i}o.fits.gz')
+        save_path = out_directory.joinpath(f'240101{fltr}{200000000 + i}o.fits')
         if save_path.is_file() and not overwrite:
             continue
         
