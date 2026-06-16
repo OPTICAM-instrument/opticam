@@ -1,3 +1,7 @@
+"""
+Collection of random helper functions.
+"""
+
 from pathlib import Path
 import re
 from typing import Any, Dict, List
@@ -10,7 +14,7 @@ from numpy.typing import NDArray
 from matplotlib.figure import Figure
 
 
-from opticam.utils.constants import filter_order
+from phoptic.utils.constants import filter_order
 
 
 
@@ -31,7 +35,7 @@ def camel_to_snake(
     str
         The converted snake_case string.
     """
-    
+
     return re.sub(r'(?<!^)(?=[A-Z])', '_', string).lower()
 
 
@@ -278,6 +282,25 @@ def compute_airmass(
     times: Time,
     observatory: EarthLocation,
     ) -> NDArray:
+    """
+    Estimate the airmass of an observation using the pointing, timestamp, and the location of the observatory.
+    
+    TODO: add reference.
+    
+    Parameters
+    ----------
+    coords : SkyCoord
+        The pointing.
+    times : Time
+        The observatation time(s).
+    observatory : EarthLocation
+        The location of the observatory.
+    
+    Returns
+    -------
+    NDArray
+        The estimated airmass.
+    """
     
     altaz_frame = AltAz(obstime=times, location=observatory)
     target_altaz = coords.transform_to(altaz_frame)

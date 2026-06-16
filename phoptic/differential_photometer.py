@@ -14,10 +14,10 @@ import pandas as pd
 from pandas import DataFrame
 
 
-from opticam.analyzer import Analyzer
-from opticam.utils.fits_handlers import get_stacked_images
-from opticam.utils.helpers import sort_filters
-from opticam.plotting.plots import plot_catalogs, plot_light_curves
+from phoptic.analyzer import Analyzer
+from phoptic.utils.fits_handlers import get_stacked_images
+from phoptic.utils.helpers import sort_filters
+from phoptic.plotting.plots import plot_catalogs, plot_light_curves
 
 
 

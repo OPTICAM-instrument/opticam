@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "opticam"
+name = "phoptic"
 version = "0.7.0"
-description = "A Python package for reducing OPTICAM data."
+description = "A Python package for reducing astronomical images."
 readme = "README.md"
 authors = [
     {name = "Zackery A. Irving", email = "zackery.irving@icloud.com"},

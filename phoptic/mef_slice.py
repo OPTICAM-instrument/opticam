@@ -10,7 +10,7 @@ from numpy.typing import NDArray
 from tqdm import tqdm
 
 
-from opticam.utils.constants import bar_format
+from phoptic.utils.constants import bar_format
 
 
 

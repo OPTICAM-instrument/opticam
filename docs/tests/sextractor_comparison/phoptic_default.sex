@@ -7,7 +7,7 @@
 CATALOG_NAME	test.cat	# name of the output catalog
 CATALOG_TYPE	FITS_1.0	# "NONE","ASCII_HEAD","ASCII","FITS_1.0" or "FITS_LDAC"
 
-PARAMETERS_NAME	opticam_default.param	# name of the file containing catalog contents
+PARAMETERS_NAME	phoptic_default.param	# name of the file containing catalog contents
 
 #------------------------------- Extraction ----------------------------------
 

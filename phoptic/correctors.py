@@ -8,11 +8,11 @@ import numpy as np
 from numpy.typing import NDArray
 
 
-from opticam.instruments import Instrument, OPTICAM_MX
-from opticam.mef_slice import create_file_paths, MEFSlice
-from opticam.utils.helpers import camera_and_filter_key, camera_key
-from opticam.utils.image_helpers import rebin_image
-from opticam.utils.logging import log_file
+from phoptic.instruments import Instrument, OPTICAM_MX
+from phoptic.mef_slice import create_file_paths, MEFSlice
+from phoptic.utils.helpers import camera_and_filter_key, camera_key
+from phoptic.utils.image_helpers import rebin_image
+from phoptic.utils.logging import log_file
 
 
 

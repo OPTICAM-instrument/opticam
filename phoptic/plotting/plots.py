@@ -17,17 +17,17 @@ import pandas as pd
 from photutils.aperture import ApertureStats, BoundingBox
 
 
-from opticam.background.global_background import BaseBackground
-from opticam.correctors import BiasCorrector, DarkNoiseCorrector, FlatFieldCorrector
-from opticam.instruments import Instrument
-from opticam.photometers import AperturePhotometer, get_growth_curve
-from opticam.fitting.models import gaussian
-from opticam.fitting.routines import fit_rms_vs_flux
-from opticam.utils.constants import catalog_colors, fwhm_scale
-from opticam.utils.helpers import save_figure
-from opticam.mef_slice import MEFSlice
-from opticam.timing.timeseries import get_lc
-from opticam.utils.helpers import camera_key, sort_dict_by_filters
+from phoptic.background.global_background import BaseBackground
+from phoptic.correctors import BiasCorrector, DarkNoiseCorrector, FlatFieldCorrector
+from phoptic.instruments import Instrument
+from phoptic.photometers import AperturePhotometer, get_growth_curve
+from phoptic.fitting.models import gaussian
+from phoptic.fitting.routines import fit_rms_vs_flux
+from phoptic.utils.constants import catalog_colors, fwhm_scale
+from phoptic.utils.helpers import save_figure
+from phoptic.mef_slice import MEFSlice
+from phoptic.timing.timeseries import get_lc
+from phoptic.utils.helpers import camera_key, sort_dict_by_filters
 
 
 

@@ -8,7 +8,7 @@ from types import FunctionType
 from typing import Any
 
 
-from opticam.utils.helpers import camera_key
+from phoptic.utils.helpers import camera_key
 
 
 

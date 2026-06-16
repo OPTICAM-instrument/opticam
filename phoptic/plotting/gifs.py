@@ -13,11 +13,11 @@ from PIL import Image
 from skimage.transform import matrix_transform
 
 
-from opticam.background.global_background import BaseBackground
-from opticam.utils.constants import catalog_colors
-from opticam.mef_slice import MEFSlice
-from opticam.utils.fits_handlers import get_data
-from opticam.instruments import Instrument
+from phoptic.background.global_background import BaseBackground
+from phoptic.utils.constants import catalog_colors
+from phoptic.mef_slice import MEFSlice
+from phoptic.utils.fits_handlers import get_data
+from phoptic.instruments import Instrument
 
 
 

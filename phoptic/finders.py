@@ -8,8 +8,8 @@ from photutils.background import Background2D
 from photutils.segmentation import SourceCatalog, SourceFinder
 
 
-from opticam.background.global_background import BaseBackground
-from opticam.utils.constants import fwhm_scale
+from phoptic.background.global_background import BaseBackground
+from phoptic.utils.constants import fwhm_scale
 
 
 

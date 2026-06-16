@@ -14,8 +14,8 @@ from astropy.units.si import m
 import numpy as np
 
 
-from opticam.mef_slice import MEFSlice
-from opticam.utils.helpers import compute_airmass
+from phoptic.mef_slice import MEFSlice
+from phoptic.utils.helpers import compute_airmass
 
 
 

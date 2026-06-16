@@ -23,25 +23,25 @@ from tqdm.contrib.concurrent import process_map
 from tqdm import tqdm
 
 
-from opticam.utils.transforms import find_translation
-from opticam.background.global_background import BaseBackground, DefaultBackground
-from opticam.correctors import BiasCorrector, DarkNoiseCorrector, FlatFieldCorrector
-from opticam.finders import DefaultFinder, get_source_coords_from_image
-from opticam.fitting.routines import fit_psf
-from opticam.instruments import Instrument, OPTICAM_MX
-from opticam.mef_slice import MEFSlice
-from opticam.noise import snr, snr_stderr, get_bias_stderr, get_dark_stderr, get_flat_stderr, get_read_stderr, \
+from phoptic.utils.transforms import find_translation
+from phoptic.background.global_background import BaseBackground, DefaultBackground
+from phoptic.correctors import BiasCorrector, DarkNoiseCorrector, FlatFieldCorrector
+from phoptic.finders import DefaultFinder, get_source_coords_from_image
+from phoptic.fitting.routines import fit_psf
+from phoptic.instruments import Instrument, OPTICAM_MX
+from phoptic.mef_slice import MEFSlice
+from phoptic.noise import snr, snr_stderr, get_bias_stderr, get_dark_stderr, get_flat_stderr, get_read_stderr, \
     get_scint_stderr, get_shot_stderr, get_sky_stderr
-from opticam.photometers import AperturePhotometer, BasePhotometer
-from opticam.plotting.gifs import compile_gif, create_gif_frame
-from opticam.plotting.plots import plot_systematics, plot_background_meshes, plot_catalogs, plot_growth_curves, \
+from phoptic.photometers import AperturePhotometer, BasePhotometer
+from phoptic.plotting.gifs import compile_gif, create_gif_frame
+from phoptic.plotting.plots import plot_systematics, plot_background_meshes, plot_catalogs, plot_growth_curves, \
     plot_time_between_files, plot_psf, plot_rms_vs_median_flux, plot_noise, plot_snrs, plot_apertures
-from opticam.utils.batching import get_batches, get_batch_size
-from opticam.utils.constants import bar_format, counts_to_mag_factor
-from opticam.utils.data_checks import scan_data
-from opticam.utils.fits_handlers import get_data, get_stacked_images, save_stacked_images
-from opticam.utils.helpers import delete_keys_from_nested_dict, match_dict_keys
-from opticam.utils.logging import configure_logger, log_psf_params, recursive_log
+from phoptic.utils.batching import get_batches, get_batch_size
+from phoptic.utils.constants import bar_format, counts_to_mag_factor
+from phoptic.utils.data_checks import scan_data
+from phoptic.utils.fits_handlers import get_data, get_stacked_images, save_stacked_images
+from phoptic.utils.helpers import delete_keys_from_nested_dict, match_dict_keys
+from phoptic.utils.logging import configure_logger, log_psf_params, recursive_log
 
 
 

@@ -10,12 +10,12 @@ import numpy as np
 from numpy.typing import NDArray
 
 
-from opticam.correctors import BiasCorrector, DarkNoiseCorrector, FlatFieldCorrector
-from opticam.mef_slice import MEFSlice
-from opticam.timing.helpers import apply_barycentric_correction
-from opticam.utils.helpers import camera_and_filter_key
-from opticam.utils.image_helpers import rebin_image
-from opticam.instruments import Instrument
+from phoptic.correctors import BiasCorrector, DarkNoiseCorrector, FlatFieldCorrector
+from phoptic.mef_slice import MEFSlice
+from phoptic.timing.helpers import apply_barycentric_correction
+from phoptic.utils.helpers import camera_and_filter_key
+from phoptic.utils.image_helpers import rebin_image
+from phoptic.instruments import Instrument
 
 
 

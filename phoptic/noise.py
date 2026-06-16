@@ -2,7 +2,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 
-from opticam.utils.constants import counts_to_mag_factor
+from phoptic.utils.constants import counts_to_mag_factor
 
 
 

@@ -8,9 +8,9 @@ from numpy.typing import NDArray
 from photutils.aperture import aperture_photometry, EllipticalAperture
 
 
-from opticam.background.local_background import BaseLocalBackground
-from opticam.utils.constants import fwhm_scale
-from opticam.utils.helpers import camel_to_snake, combine_variances
+from phoptic.background.local_background import BaseLocalBackground
+from phoptic.utils.constants import fwhm_scale
+from phoptic.utils.helpers import camel_to_snake, combine_variances
 
 
 

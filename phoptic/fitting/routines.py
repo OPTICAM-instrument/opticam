@@ -6,8 +6,8 @@ from numpy.typing import NDArray
 from scipy.optimize import curve_fit, minimize  # TODO: replace with astropy modelling?
 
 
-from opticam.fitting.models import power_law, straight_line
-from opticam.fitting.psf_models import gaussian
+from phoptic.fitting.models import power_law, straight_line
+from phoptic.fitting.psf_models import gaussian
 
 
 
@@ -77,8 +77,8 @@ def fit_psf(
     image: NDArray,
     x_init: float | int,
     y_init: float | int,
-    semimajor_sigma: float,
-    semiminor_sigma: float,
+    semimajor_axis: float,
+    semiminor_axis: float,
     ) -> tuple[float, float, float]:
     """
     Find the location of a source by fitting a Gaussian PSF to an image.
@@ -91,10 +91,10 @@ def fit_psf(
         The initial guess for the x location of the PSF.
     y_init : float | int
         The initial guess for the y location of the PSF.
-    semimajor_sigma : float
-        The semi-major standard deviation of the PSF.
-    semiminor_sigma : float
-        The semi-minor standard deviation of the PSF.
+    semimajor_axis : float
+        The semi-major axis of the PSF.
+    semiminor_axis : float
+        The semi-minor axis of the PSF.
     
     Returns
     -------
@@ -132,8 +132,8 @@ def fit_psf(
         args=(
             normed_image,
             1.,                 # amplitude: normalised to 1
-            semimajor_sigma,
-            semiminor_sigma,
+            semimajor_axis,
+            semiminor_axis,
             ),
         method='L-BFGS-B',
         bounds=[
