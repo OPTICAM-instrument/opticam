@@ -185,12 +185,12 @@ class DefaultLocalBackground(BaseLocalBackground):
         """
         
         return EllipticalAnnulus(
-            position,
-            self.r_in_scale * semimajor_axis,
-            self.r_out_scale * semimajor_axis,
-            self.r_out_scale * semiminor_axis,
-            self.r_in_scale * semiminor_axis,
-            theta,
+            positions=position,
+            a_in=self.r_in_scale * semimajor_axis,
+            a_out=self.r_out_scale * semimajor_axis,
+            b_out=self.r_out_scale * semiminor_axis,
+            b_in=self.r_in_scale * semiminor_axis,
+            theta=theta,
             )
 
 

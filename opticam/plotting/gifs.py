@@ -93,7 +93,7 @@ def create_gif_frame(
     
     # for each source
     for i in range(len(catalog)):
-        source_position = (catalog["xcentroid"][i], catalog["ycentroid"][i])
+        source_position = (catalog["x_centroid"][i], catalog["y_centroid"][i])
         
         if file == reference_file:
             aperture_position = source_position
@@ -105,7 +105,7 @@ def create_gif_frame(
             aperture_position = source_position
             ax.set_title(f'{file_name} (unaligned)', color='red', fontsize='large')
         
-        radius = 5 * aperture_selector(catalog["semimajor_sigma"].value)  # type: ignore
+        radius = 5 * aperture_selector(catalog["semimajor_axis"].value)  # type: ignore
         
         ax.add_patch(
             Circle(

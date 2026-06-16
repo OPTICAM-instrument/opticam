@@ -104,15 +104,15 @@ def plot_catalogs(
                 )
         
         # get aperture radius
-        radius = 5 * np.median(catalogs[fltr]["semimajor_sigma"].value)  # type: ignore
+        radius = 5 * np.median(catalogs[fltr]["semimajor_axis"].value)  # type: ignore
         
         for j in range(len(catalogs[fltr])):
             # label sources
             axes[i].add_patch(
                 Circle(
                     xy=(
-                        catalogs[fltr]["xcentroid"][j],
-                        catalogs[fltr]["ycentroid"][j],
+                        catalogs[fltr]["x_centroid"][j],
+                        catalogs[fltr]["y_centroid"][j],
                         ),  # type: ignore
                     radius=radius,
                     edgecolor=catalog_colors[j % len(catalog_colors)],
@@ -121,8 +121,8 @@ def plot_catalogs(
                     ),
                 )
             axes[i].text(
-                catalogs[fltr]["xcentroid"][j] + 1.05 * radius,
-                catalogs[fltr]["ycentroid"][j] + 1.05 * radius,
+                catalogs[fltr]["x_centroid"][j] + 1.05 * radius,
+                catalogs[fltr]["y_centroid"][j] + 1.05 * radius,
                 j + 1,  # source number
                 color=catalog_colors[j % len(catalog_colors)],
                 fontsize='large',
@@ -452,10 +452,10 @@ def plot_growth_curves(
     """
     
     def pix2sigma(x):
-        return x / (psf_params['semimajor_sigma'] * fwhm_scale)
+        return x / (psf_params['semimajor_axis'] * fwhm_scale)
     
     def sigma2pix(x):
-        return x * (psf_params['semimajor_sigma'] / fwhm_scale)
+        return x * (psf_params['semimajor_axis'] / fwhm_scale)
     
     if isinstance(targets, int):
         targets = [targets]
@@ -488,9 +488,9 @@ def plot_growth_curves(
         
         radii, fluxes = get_growth_curve(
             image=image,
-            x_centroid=cat['xcentroid'][i],
-            y_centroid=cat['ycentroid'][i],
-            r_max = round(10 * psf_params['semimajor_sigma']),
+            x_centroid=cat['x_centroid'][i],
+            y_centroid=cat['y_centroid'][i],
+            r_max = round(10 * psf_params['semimajor_axis']),
         )
         
         axes[i].step(
@@ -555,8 +555,8 @@ def plot_psf(
     
     w = a * 10  # region width
     
-    xc = catalog['xcentroid'][source_indx]
-    yc = catalog['ycentroid'][source_indx]
+    xc = catalog['x_centroid'][source_indx]
+    yc = catalog['y_centroid'][source_indx]
     x_range = np.arange(max(x_lo, round(xc - w)), min(x_hi, round(xc + w)))  # x range
     y_range = np.arange(max(y_lo, round(yc - w)), min(y_hi, round(yc + w)))  # y range
     x_smooth = np.linspace(x_range[0], x_range[-1], 100)
@@ -1179,7 +1179,7 @@ def plot_apertures(
     
     for i, target in enumerate(targets):
         cat_indx = target - 1
-        position = [cat['xcentroid'][cat_indx], cat['ycentroid'][cat_indx]]
+        position = [cat['x_centroid'][cat_indx], cat['y_centroid'][cat_indx]]
         theta = cat['orientation'][cat_indx].value
         
         aperture = photometer.get_aperture(
@@ -1191,8 +1191,8 @@ def plot_apertures(
             annulus_stats = photometer.local_background_estimator.get_stats(
                 data=data,
                 position=position,
-                semimajor_axis=psf_params['semimajor_sigma'],
-                semiminor_axis=psf_params['semiminor_sigma'],
+                semimajor_axis=psf_params['semimajor_axis'],
+                semiminor_axis=psf_params['semiminor_axis'],
                 theta=theta * np.pi / 180,  # radians
                 )
             bbox = annulus_stats.bbox
@@ -1233,10 +1233,10 @@ def plot_apertures(
             annulus_mask = np.asarray(annulus_stats.data_cutout).astype(bool)
             
             # factor of 2 since matplotlib assumes diameter
-            annulus_inner_width = 2 * photometer.local_background_estimator.r_in_scale * psf_params['semimajor_sigma']
-            annulus_outer_width = 2 * photometer.local_background_estimator.r_out_scale * psf_params['semimajor_sigma']
-            annulus_inner_height = 2 * photometer.local_background_estimator.r_in_scale * psf_params['semiminor_sigma']
-            annulus_outer_height = 2 * photometer.local_background_estimator.r_out_scale * psf_params['semiminor_sigma']
+            annulus_inner_width = 2 * photometer.local_background_estimator.r_in_scale * psf_params['semimajor_axis']
+            annulus_outer_width = 2 * photometer.local_background_estimator.r_out_scale * psf_params['semimajor_axis']
+            annulus_inner_height = 2 * photometer.local_background_estimator.r_in_scale * psf_params['semiminor_axis']
+            annulus_outer_height = 2 * photometer.local_background_estimator.r_out_scale * psf_params['semiminor_axis']
             
             for coord in np.argwhere(annulus_mask):
                 row, col = coord
@@ -1339,7 +1339,7 @@ def get_max_region_size(
     
     for target in targets:
         i = targets.index(target)
-        position = [cat['xcentroid'][i], cat['ycentroid'][i]]
+        position = [cat['x_centroid'][i], cat['y_centroid'][i]]
         
         aperture = photometer.get_aperture(
             position=position,
@@ -1350,8 +1350,8 @@ def get_max_region_size(
             annulus_stats = photometer.local_background_estimator.get_stats(
                 data=data,
                 position=position,
-                semimajor_axis=psf_params['semimajor_sigma'],
-                semiminor_axis=psf_params['semiminor_sigma'],
+                semimajor_axis=psf_params['semimajor_axis'],
+                semiminor_axis=psf_params['semiminor_axis'],
                 theta=psf_params['orientation'],
                 )
             

@@ -24,7 +24,7 @@ class BasePhotometer(ABC):
     def __init__(
         self,
         forced: bool = False,
-        source_matching_tolerance: float = 5.,
+        source_matching_tolerance: float = 3.,
         local_background_estimator: BaseLocalBackground | Callable | None = None,
         ):
         """
@@ -37,7 +37,7 @@ class BasePhotometer(ABC):
             are used to perform photometry, even in images where the source is not detected, and the resulting light
             curves will be saved with a 'forced' prefix.
         source_matching_tolerance : float, optional
-            The tolerance for source position matching in standard deviations (assuming a Gaussian PSF), by default 5.
+            The tolerance for source position matching in standard deviations (assuming a Gaussian PSF), by default 3.
             This parameter defines how far from the transformed catalogue position a source can be while still being
             considered the same source.
         local_background_estimator : BaseLocalBackground | Callable | None, optional
@@ -90,7 +90,7 @@ class BasePhotometer(ABC):
             image to sources in the catalogue.
         psf_params : Dict[str, float]
             The PSF parameters for the camera used to take the image. This parameter is defined in the catalogue and
-            has the following keys: 'semimajor_sigma' (in pixels), 'semiminor_sigma' (in pixels), and 'orientation' (in
+            has the following keys: 'semimajor_axis' (in pixels), 'semiminor_axis' (in pixels), and 'orientation' (in
             *degrees*).
         read_noise : float
             The detector's read noise.
@@ -126,7 +126,7 @@ class BasePhotometer(ABC):
             The source index.
         psf_params : Dict[str, float]
             The PSF parameters for the camera used to take the image. This parameter is defined in the catalogue and
-            has the following keys: 'semimajor_sigma' (in pixels), 'semiminor_sigma' (in pixels), and 'orientation' (in
+            has the following keys: 'semimajor_axis' (in pixels), 'semiminor_axis' (in pixels), and 'orientation' (in
             *degrees*).
         
         Returns
@@ -166,7 +166,7 @@ class BasePhotometer(ABC):
             The source index.
         psf_params : Dict[str, float]
             The PSF parameters for the camera used to take the image. This parameter is defined in the catalogue and
-            has the following keys: 'semimajor_sigma' (in pixels), 'semiminor_sigma' (in pixels), and 'orientation' (in
+            has the following keys: 'semimajor_axis' (in pixels), 'semiminor_axis' (in pixels), and 'orientation' (in
             *degrees*).
         
         Returns
@@ -182,7 +182,7 @@ class BasePhotometer(ABC):
         distances = np.sqrt((image_coords[:, 0] - cat_coords[source_index][0])**2 + (image_coords[:, 1] - cat_coords[source_index][1])**2)
         
         # if the closest source is further than the specified tolerance
-        if np.min(distances) > self.source_matching_tolerance * np.sqrt(psf_params['semimajor_sigma']**2 + psf_params['semiminor_sigma']**2):
+        if np.min(distances) > self.source_matching_tolerance * np.sqrt(psf_params['semimajor_axis']**2 + psf_params['semiminor_axis']**2):
             return None
         else:
             # get the position of the closest source (assumed to be the source of interest)
@@ -284,7 +284,7 @@ class BasePhotometer(ABC):
             The position of the source in the image.
         psf_params : Dict[str, float]
             The PSF parameters for the camera used to take the image. This parameter is defined in the catalogue and
-            has the following keys: 'semimajor_sigma' (in pixels), 'semiminor_sigma' (in pixels), and 'orientation' (in
+            has the following keys: 'semimajor_axis' (in pixels), 'semiminor_axis' (in pixels), and 'orientation' (in
             *degrees*).
         read_noise : float
             The detector's read noise.
@@ -370,7 +370,7 @@ class AperturePhotometer(BasePhotometer):
         semiminor_axis: int | None = None,
         orientation: float | None = None,
         forced: bool = False,
-        source_matching_tolerance: float = 5.,
+        source_matching_tolerance: float = 3.,
         local_background_estimator: None | BaseLocalBackground = None,
         ):
         """
@@ -389,7 +389,7 @@ class AperturePhotometer(BasePhotometer):
             are used to perform photometry, even in images where the source is not detected, and the resulting light
             curves will be saved with a 'forced' prefix.
         source_matching_tolerance : float, optional
-            The tolerance for source position matching in standard deviations (assuming a Gaussian PSF), by default 5.
+            The tolerance for source position matching in standard deviations (assuming a Gaussian PSF), by default 3.
             This parameter defines how far from the transformed catalogue position a source can be while still being
             considered the same source.
         local_background_estimator : None | BaseLocalBackground, optional
@@ -443,7 +443,7 @@ class AperturePhotometer(BasePhotometer):
             image to sources in the catalogue.
         psf_params : Dict[str, float]
             The PSF parameters for the camera used to take the image. This parameter is defined in the catalogue and
-            has the following keys: 'semimajor_sigma' (in pixels), 'semiminor_sigma' (in pixels), and 'orientation' (in
+            has the following keys: 'semimajor_axis' (in pixels), 'semiminor_axis' (in pixels), and 'orientation' (in
             *degrees*).
         read_noise : float
             The detector's read noise.
@@ -522,7 +522,7 @@ class AperturePhotometer(BasePhotometer):
             The position of the source.
         psf_params : Dict[str, float]
             The PSF parameters for the camera used to take the image. This parameter is defined in the catalogue and
-            has the following keys: 'semimajor_sigma' (in pixels), 'semiminor_sigma' (in pixels), and 'orientation' (in
+            has the following keys: 'semimajor_axis' (in pixels), 'semiminor_axis' (in pixels), and 'orientation' (in
             *degrees*).
         read_noise : float
             The instrument's read noise.
@@ -562,8 +562,8 @@ class AperturePhotometer(BasePhotometer):
             local_background, local_background_rms = self.local_background_estimator(
                 image,
                 position,
-                psf_params['semimajor_sigma'],
-                psf_params['semiminor_sigma'],
+                psf_params['semimajor_axis'],
+                psf_params['semiminor_axis'],
                 psf_params['orientation'],
                 )
             
@@ -593,17 +593,17 @@ class AperturePhotometer(BasePhotometer):
         
         if self.semimajor_axis is not None and self.semiminor_axis is not None and self.orientation is not None:
             return EllipticalAperture(
-                position,
-                self.semimajor_axis,
-                self.semiminor_axis,
-                self.orientation,
+                positions=position,
+                a=self.semimajor_axis,
+                b=self.semiminor_axis,
+                theta=self.orientation,
                 )
         else:
             return EllipticalAperture(
-                position,
-                fwhm_scale * psf_params['semimajor_sigma'],
-                fwhm_scale * psf_params['semiminor_sigma'],
-                psf_params['orientation'],
+                positions=position,
+                a=fwhm_scale * psf_params['semimajor_axis'],
+                b=fwhm_scale * psf_params['semiminor_axis'],
+                theta=psf_params['orientation'],
                 )
 
 
@@ -674,7 +674,7 @@ class OptimalPhotometer(BasePhotometer):
             image to sources in the catalogue.
         psf_params : Dict[str, float]
             The PSF parameters for the camera used to take the image. This parameter is defined in the catalogue and
-            has the following keys: 'semimajor_sigma' (in pixels), 'semiminor_sigma' (in pixels), and 'orientation' (in
+            has the following keys: 'semimajor_axis' (in pixels), 'semiminor_axis' (in pixels), and 'orientation' (in
             *degrees*).
         read_noise : float
             The detector's read noise.
@@ -750,7 +750,7 @@ class OptimalPhotometer(BasePhotometer):
             The position of the source in the image, given as (y, x) coordinates.
         psf_params : Dict[str, float]
             The PSF parameters for the camera used to take the image. This parameter is defined in the catalogue and
-            has the following keys: 'semimajor_sigma' (in pixels), 'semiminor_sigma' (in pixels), and 'orientation' (in
+            has the following keys: 'semimajor_axis' (in pixels), 'semiminor_axis' (in pixels), and 'orientation' (in
             *degrees*).
         read_noise : float
             The instrument's read noise.
@@ -781,8 +781,8 @@ class OptimalPhotometer(BasePhotometer):
             local_background, local_background_rms = self.local_background_estimator(
                 image,
                 position,
-                psf_params['semimajor_sigma'],
-                psf_params['semiminor_sigma'],
+                psf_params['semimajor_axis'],
+                psf_params['semiminor_axis'],
                 psf_params['orientation'],
                 )
             
@@ -905,8 +905,8 @@ def get_optimal_flux_and_error(
     weights, norm = get_optimal_weights(
         var=total_var,
         position=position,
-        psf_major=psf_params['semimajor_sigma'],
-        psf_minor=psf_params['semiminor_sigma'],
+        psf_major=psf_params['semimajor_axis'],
+        psf_minor=psf_params['semiminor_axis'],
         psf_orientation=psf_params['orientation'],
         )
     
@@ -965,6 +965,7 @@ def get_growth_curve(
             position=position,
             psf_params={},  # empty dict since not needed
             read_noise=0.,
+            rel_scint_noise=0.
             )[0]
         
         fluxes.append(flux)

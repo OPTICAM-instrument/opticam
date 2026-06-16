@@ -335,7 +335,7 @@ class DifferentialPhotometer:
             )
         
         # source coords in reference filter catalog
-        ref_coords = np.asarray([input_cat["xcentroid"].value, input_cat["ycentroid"].value]).T
+        ref_coords = np.asarray([input_cat["x_centroid"].value, input_cat["y_centroid"].value]).T
         ref_target_coords = ref_coords[input_target - 1]  # subtract 1 to account for zero-indexing
         ref_comparison_coords = [ref_coords[comp - 1] for comp in input_comparisons]
         
@@ -671,7 +671,7 @@ def transform_IDs(
         out_directory.joinpath(f"cat/{key}_catalog.ecsv"),
         format="ascii.ecsv",
         )
-    coords = np.asarray([cat["xcentroid"].value, cat["ycentroid"].value]).T
+    coords = np.asarray([cat["x_centroid"].value, cat["y_centroid"].value]).T
     
     # get star-to-star correspondence
     source_arr, ref_arr = find_transform(coords, ref_coords)[1]

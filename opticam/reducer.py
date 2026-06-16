@@ -274,10 +274,10 @@ class Reducer:
         
         if finder is None:
             effective_image_size = 2048 // self.binning_scale // self.rebin_factor
-            npixels = 128 // (2048 // effective_image_size)**2
+            n_pixels = 128 // (2048 // effective_image_size)**2
             border_width = 2048 // self.binning_scale // self.rebin_factor // 16
-            self.finder = DefaultFinder(npixels, border_width)
-            self.logger.debug(f'Using default source finder with npixels={npixels} and border_width={border_width}.')
+            self.finder = DefaultFinder(n_pixels, border_width)
+            self.logger.debug(f'Using default source finder with n_pixels={n_pixels} and border_width={border_width}.')
         elif callable(finder):
             self.finder = finder
             self.logger.debug(f'Using custom source finder {finder.__class__.__name__} with parameters {finder.__dict__}.')
@@ -488,7 +488,7 @@ class Reducer:
                     n_sources=n_alignment_sources,
                     )
             except Exception as e:
-                self.logger.error(f'No sources detected in {key} reference image ({self.reference_files[key]}): {e}. Reducing threshold or npixels in the source finder may help.')
+                self.logger.error(f'No sources detected in {key} reference image ({self.reference_files[key]}): {e}. Reducing threshold or n_pixels in the source finder may help.')
                 continue
             
             if len(reference_coords) < n_alignment_sources and transform_type == 'translation':
@@ -529,7 +529,7 @@ class Reducer:
             # estimate threshold for source detection
             threshold = detect_threshold(
                 stacked_image,
-                nsigma=self.threshold,
+                n_sigma=self.threshold,
                 )
             
             try:
@@ -707,8 +707,8 @@ class Reducer:
             image=region,
             x_init=int(x_init),
             y_init=int(y_init),
-            semimajor_sigma=self.psf_params[key]['semimajor_sigma'],
-            semiminor_sigma=self.psf_params[key]['semiminor_sigma'],
+            semimajor_axis=self.psf_params[key]['semimajor_axis'],
+            semiminor_axis=self.psf_params[key]['semiminor_axis'],
             )
         
         # convert region coordinates to image coordinates
@@ -717,8 +717,8 @@ class Reducer:
         
         # add minimally required information for chosen source to catalog
         new_row = {
-            'xcentroid': x_image,
-            'ycentroid': y_image,
+            'x_centroid': x_image,
+            'y_centroid': y_image,
             'orientation': np.rad2deg(theta_rad) * u.deg,
             }
         self.catalogs[key].add_row(new_row)
@@ -1093,8 +1093,8 @@ class Reducer:
         
         for key in self.catalogs.keys():
             
-            a = self.psf_params[key]['semimajor_sigma']
-            b = self.psf_params[key]['semiminor_sigma']
+            a = self.psf_params[key]['semimajor_axis']
+            b = self.psf_params[key]['semiminor_axis']
             
             for source_indx in range(len(self.catalogs[key])):
                 plot_psf(
@@ -1298,8 +1298,8 @@ class Reducer:
                 self.logger.info(f'Skipping {key} since existing light curves files were found. To overwrite these files, set overwrite=True.')
                 continue
             
-            cat_coords = np.array([self.catalogs[key]["xcentroid"].value,  # type: ignore
-                                      self.catalogs[key]["ycentroid"].value],  # type:ignore
+            cat_coords = np.array([self.catalogs[key]["x_centroid"].value,  # type: ignore
+                                      self.catalogs[key]["y_centroid"].value],  # type:ignore
                                      ).T
             
             files = [file for file in self.camera_files[key] if file not in self.unaligned_files]
@@ -1388,8 +1388,8 @@ class Reducer:
         if not photometer.forced:
             tbl = self.finder(image, threshold)
             image_coords = np.array([
-                tbl["xcentroid"].value,
-                tbl["ycentroid"].value,
+                tbl["x_centroid"].value,
+                tbl["y_centroid"].value,
                 ]).T
         
         # apply transform to catalogue coordinates
@@ -1489,7 +1489,7 @@ class Reducer:
             variance, flat-field variance, and scintillation noise.
         """
         
-        coords = np.asarray([self.catalogs[key]['xcentroid'], self.catalogs[key]['ycentroid']]).T
+        coords = np.asarray([self.catalogs[key]['x_centroid'], self.catalogs[key]['y_centroid']]).T
         
         img, header, noise_dict = get_data(
             file=file,
@@ -1687,13 +1687,13 @@ def set_psf_params(
         The PSF parameters.
     """
     
-    semimajor_sigma_pix = aperture_selector(catalog['semimajor_sigma'].value)  # type: ignore
-    semiminor_sigma_pix = aperture_selector(catalog['semiminor_sigma'].value)  # type: ignore
+    semimajor_axis_pix = aperture_selector(catalog['semimajor_axis'].value)  # type: ignore
+    semiminor_axis_pix = aperture_selector(catalog['semiminor_axis'].value)  # type: ignore
     orientation = aperture_selector(catalog['orientation'].value)  # type: ignore
     
     return {
-        'semimajor_sigma': semimajor_sigma_pix,
-        'semiminor_sigma': semiminor_sigma_pix,
+        'semimajor_axis': semimajor_axis_pix,
+        'semiminor_axis': semiminor_axis_pix,
         'orientation': orientation,
     }
 
