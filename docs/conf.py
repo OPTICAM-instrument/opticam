@@ -10,7 +10,7 @@ from pathlib import Path
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
-project = 'opticam'
+project = 'phoptic'
 copyright = '2026, OPTICAM-instrument developers'
 author = 'Zackery A. Irving, Noel Castro Segura'
 
