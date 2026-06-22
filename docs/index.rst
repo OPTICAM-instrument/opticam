@@ -1,7 +1,7 @@
-opticam
+phoptic
 =====
 
-A Python package for reducing OPTICAM data.
+A Python package for reducing astronomical images.
 
 .. toctree:: 
    :maxdepth: 3

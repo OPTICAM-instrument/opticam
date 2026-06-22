@@ -9,8 +9,8 @@ authors:
     orcid: http://orcid.org/0000-0002-5870-0443
 
 title: "opticam"
-version: 0.6.0
+version: 0.7.0
 identifiers:
 #  - type: doi
 #    value: 10.5281/zenodo.1234
-date-released: 2025-03-13
+date-released: 2025-06-16

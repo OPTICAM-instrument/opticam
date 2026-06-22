@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "opticam"
-version = "0.6.0"
-description = "A Python package for reducing OPTICAM data."
+name = "phoptic"
+version = "0.7.0"
+description = "A Python package for reducing astronomical images."
 readme = "README.md"
 authors = [
     {name = "Zackery A. Irving", email = "zackery.irving@icloud.com"},
@@ -14,19 +14,19 @@ authors = [
 
 requires-python = ">=3.14.0"
 dependencies = [
-    "astroalign == 2.6.2",
-    "astropy == 7.2.0",
-    "ccdproc == 2.5.1",
-    "matplotlib == 3.10.8",
-    "numba == 0.63.1",
+    "astroalign >= 2.6.2",
+    "astropy >= 7.2.0",
+    "ccdproc >= 2.5.1",
+    "matplotlib >= 3.10.8",
+    "numba >= 0.63.1",
     "numpy == 2.3.5",
-    "pandas == 3.0.0",
-    "pillow == 12.1.1",
-    "photutils == 2.3.0",
-    "scikit-image == 0.26.0",
-    "scipy == 1.17.0",
-    "stingray == 2.2.10",
-    "tqdm == 4.67.1",
+    "pandas >= 3.0.0",
+    "pillow >= 12.1.1",
+    "photutils >= 2.3.0",
+    "scikit-image >= 0.26.0",
+    "scipy >= 1.17.0",
+    "stingray >= 2.3.2",
+    "tqdm >= 4.67.1",
 ]
 
 [project.optional-dependencies]

@@ -11,12 +11,12 @@ from tqdm.contrib.concurrent import process_map
 from tqdm import tqdm
 
 
-from opticam.utils.constants import bar_format
-from opticam.utils.fits_handlers import get_header_info
-from opticam.mef_slice import create_file_paths, MEFSlice
-from opticam.utils.helpers import camera_and_filter_key, sort_dict_by_filters
-from opticam.utils.logging import log_file
-from opticam.instruments import Instrument
+from phoptic.utils.constants import bar_format
+from phoptic.utils.fits_handlers import get_header_info
+from phoptic.mef_slice import create_file_paths, MEFSlice
+from phoptic.utils.helpers import camera_and_filter_key, sort_dict_by_filters
+from phoptic.utils.logging import log_file
+from phoptic.instruments import Instrument
 
 
 

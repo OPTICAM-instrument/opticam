@@ -8,11 +8,14 @@ from astropy.coordinates import EarthLocation, SkyCoord
 from astropy.io.fits import Header
 from astropy.time import Time
 import astropy.units as u
+from astropy.units import Quantity
 import json
+from astropy.units.si import m
 import numpy as np
 
 
-from opticam.mef_slice import MEFSlice
+from phoptic.mef_slice import MEFSlice
+from phoptic.utils.helpers import compute_airmass
 
 
 
@@ -24,10 +27,14 @@ class Instrument(ABC):
     
     Parameters
     ----------
+    diameter : Quantity
+        The diameter of the telescope.
     location : EarthLocation
         The location of the observatory as an `astropy.coordinates.EarthLocation` object.
     pixel_scales : dict[str, float]
         The pixel scales for each camera in arcsec/pixel {camera: pixel scale}.
+    airmass_kw : str, optional
+        The airmass keyword, by default "AIRMASS"
     binning_kw : str, optional
         The binning keyword, by default "BINNING".
     camera_kw : str, optional
@@ -55,8 +62,10 @@ class Instrument(ABC):
     """
 
 
+    diameter: Quantity
     location: EarthLocation
     pixel_scales: dict[str, float]
+    airmass_kw: str = 'AIRMASS'
     binning_kw: str = 'BINNING'
     camera_kw: str = 'INSTRUME'
     dark_curr_kw: str = 'DARKCURR'
@@ -109,41 +118,45 @@ class Instrument(ABC):
         
         #################################################### errors ####################################################
         
-        if self.exptime_kw not in keys:
+        try:
+            self.get_airmass(header=header)
+        except Exception as e:
             errors += 1
-            print(f'[OPTICAM] ERROR: {self.__class__.__name__}.exptime_kw ({self.exptime_kw}) is not a valid header keyword for file {file.path} extension {file.ext}.')
-        
-        if self.filter_kw not in keys:
-            errors += 1
-            print(f'[OPTICAM] ERROR: {self.__class__.__name__}.filter_kw ({self.filter_kw}) is not a valid header keyword for file {file.path} extension {file.ext}.')
-        else:
-            try:
-                fltr = self.get_filter(header=header)
-                assert(isinstance(fltr, str))
-            except Exception as e:
-                errors += 1
-                print(f'[OPTICAM] ERROR: {self.__class__.__name__}.get_filter() failed due to the following exception: {e}.')
-        
-        if self.gain_kw not in keys:
-            errors += 1
-            print(f'[OPTICAM] ERROR: {self.__class__.__name__}.gain_kw ({self.gain_kw}) is not a valid header keyword for file {file.path} extension {file.ext}.')
-        
-        if self.dateobs_kw not in keys:
-            errors += 1
-            print(f'[OPTICAM] ERROR: {self.__class__.__name__}.dateobs_kw ({self.dateobs_kw}) is not a valid header keyword for file {file.path} extension {file.ext}.')
-        
-        if self.filter_kw in keys:
-            try:
-                self.pixel_scales[self.get_camera(header=header)]
-            except Exception as e:
-                errors += 1
-                print(f'[OPTICAM] ERROR: {self.__class__.__name__}.pixel_scales does not contain a corresponding value for the camera {self.get_camera(header=header)}.')
+            print(f'[OPTICAM] ERROR: {self.__class__.__name__}.get_airmass() failed due to the following exception: {e}')
         
         try:
             self.get_binning(header=header)
         except Exception as e:
             errors += 1
-            print(f"[OPTICAM] ERROR: failed to read image binning for file {file.path} extension {file.ext} due to the exception {e} This is either due to an incorrect keyword being passed to binning_kw and/or your images do not contain a binning keyword. In the latter case, you will need to define a custom instrument with a custom get_binning() method. See https://opticam.readthedocs.io/en/latest/_executed/instruments.html#My-images-don't-contain-a-binning-keyword.-What-should-I-do? for details.")
+            print(f"[OPTICAM] ERROR: failed to read image binning for file {file.path} extension {file.ext} due to the exception {e}")
+        
+        try:
+            self.get_exptime(header=header)
+        except Exception as e:
+            errors += 1
+            print(f'[OPTICAM] ERROR: {self.__class__.__name__}.get_exptime() failed due to the following exception: {e}')
+        
+        try:
+            self.get_filter(header=header)
+        except Exception as e:
+            errors += 1
+            print(f'[OPTICAM] ERROR: {self.__class__.__name__}.get_filter() failed due to the following exception: {e}')
+        
+        try:
+            self.get_gain(header=header)
+        except Exception as e:
+            errors += 1
+            print(f'[OPTICAM] ERROR: {self.__class__.__name__}.get_gain() failed due to the following exception: {e}')
+        
+        if self.dateobs_kw not in keys:
+            errors += 1
+            print(f'[OPTICAM] ERROR: {self.__class__.__name__}.dateobs_kw ({self.dateobs_kw}) is not a valid header keyword for file {file.path} extension {file.ext}.')
+        
+        try:
+            self.pixel_scales[self.get_camera(header=header)]
+        except Exception as e:
+            errors += 1
+            print(f'[OPTICAM] ERROR: {self.__class__.__name__}.pixel_scales does not contain a corresponding value for the camera {self.get_camera(header=header)}.')
         
         try:
             Time(self.get_mjd(header=header), format='mjd')
@@ -152,26 +165,18 @@ class Instrument(ABC):
             print(f"[OPTICAM] ERROR: Failed to parse the MJD of the image due the following exception: {e}. This is likely due to an incorrect keyword being passed to dateobs_kw and/or your images do not give timestamps in FITS format. In the latter case, you will need to define a custom instrument with a custom get_mjd() method. See https://opticam.readthedocs.io/en/latest/_executed/instruments.html#Defining-an-instrument-from-the-opticam.Instrument-base-class for details.")
         
         try:
-            float(self.get_read_noise(header=header))
+            self.get_read_noise(header=header)
         except Exception as e:
             errors += 1
-            print(f"[OPTICAM] ERROR: Failed to parse the read noise in the image due the following exception: {e}. This is likely due to an incorrect keyword being passed to read_noise_kw or your images do not contain read noise information. In the latter case, you will need to define a custom instrument with a custom get_read_noise() method. See https://opticam.readthedocs.io/en/latest/_executed/instruments.html#Defining-an-instrument-from-the-opticam.Instrument-base-class for details.")
+            print(f'[OPTICAM] ERROR: {self.__class__.__name__}.get_gain() failed due to the following exception: {e}')
         
         ################################################### warnings ###################################################
-        
-        if self.ra_kw not in keys:
-            warnings += 1
-            print(f'[OPTICAM] WARNING: {self.__class__.__name__}.ra_kw ({self.ra_kw}) is not a valid header keyword for file {file.path} extension {file.ext}.')
-        
-        if self.dec_kw not in keys:
-            warnings += 1
-            print(f'[OPTICAM] WARNING: {self.__class__.__name__}.dec_kw ({self.dec_kw}) is not a valid header keyword for file {file.path} extension {file.ext}.')
         
         try:
             self.get_sky_coord(header=header)
         except Exception as e:
             warnings += 1
-            print(f'[OPTICAM] Warning: {self.__class__.__name__}.get_sky_coord() failed due to the following exception: {e}. Barycentric correction will not be possible. If this is a mistake, check the specified RA and DEC keywords ({self.ra_kw} and {self.dec_kw}, respectively) are present in your image headers. If they are present, then they are likely in an unrecognised format. In this case, you will need to define a custom instrument with a custom get_sky_coord() method. See https://opticam.readthedocs.io/en/latest/autoapi/opticam/instruments/index.html#opticam.instruments.Instrument.get_sky_coord for details.')
+            print(f'[OPTICAM] Warning: {self.__class__.__name__}.get_sky_coord() failed due to the following exception: {e} Barycentric correction will not be possible. If this is a mistake, check the specified RA and DEC keywords ({self.ra_kw} and {self.dec_kw}, respectively) are present in your image headers. If they are present, then they are likely in an unrecognised format. In this case, you will need to define a custom instrument with a custom get_sky_coord() method. See https://opticam.readthedocs.io/en/latest/autoapi/opticam/instruments/index.html#opticam.instruments.Instrument.get_sky_coord for details.')
         
         if self.dark_curr_kw not in keys:
             warnings += 1
@@ -325,6 +330,62 @@ class Instrument(ABC):
         return dark_curr * exptime
 
 
+    def get_airmass(
+        self,
+        file: MEFSlice | None = None,
+        header: Header | None = None,
+        ) -> float:
+        """
+        Get the airmass of an image using the instrument's `airmass_kw` attribute.
+        
+        Parameters
+        ----------
+        file : MEFSlice | None, optional
+            The `MEFSlice` instance corresponding to the file, by default `None`. If `None`, a `Header` must be passed
+            to `header` instead.
+        header : Header, optional
+            The header of the FITS file, by default `None`. If `None`, a `MEFSlice` must be passed to `file` instead.
+        
+        Returns
+        -------
+        float
+            The airmass of the image.
+        """
+        
+        if file is not None:
+            header: Header = file.get_header()
+        
+        return header[self.airmass_kw]
+
+
+    def get_gain(
+        self,
+        file: MEFSlice | None = None,
+        header: Header | None = None,
+        ) -> float:
+        """
+        Get the gain of an image using the instrument's `gain_kw` attribute.
+        
+        Parameters
+        ----------
+        file : MEFSlice | None, optional
+            The `MEFSlice` instance corresponding to the file, by default `None`. If `None`, a `Header` must be passed to
+            `header` instead.
+        header : Header, optional
+            The header of the FITS file, by default `None`. If `None`, a `MEFSlice` must be passed to `file` instead.
+        
+        Returns
+        -------
+        float
+            The gain of the image.
+        """
+        
+        if file is not None:
+            header: Header = file.get_header()
+        
+        return header[self.gain_kw]
+
+
     def get_binning(
         self,
         file: MEFSlice | None = None,
@@ -351,6 +412,34 @@ class Instrument(ABC):
             header: Header = file.get_header()
         
         return header[self.binning_kw]
+
+
+    def get_exptime(
+        self,
+        file: MEFSlice | None = None,
+        header: Header | None = None,
+        ) -> float:
+        """
+        Get the exposure time of an image using the instrument's `exptime_kw` attribute.
+        
+        Parameters
+        ----------
+        file : MEFSlice | None, optional
+            The `MEFSlice` instance corresponding to the file, by default `None`. If `None`, a `Header` must be passed to
+            `header` instead.
+        header : Header, optional
+            The header of the FITS file, by default `None`. If `None`, a `MEFSlice` must be passed to `file` instead.
+        
+        Returns
+        -------
+        str
+            The exposure time of the image.
+        """
+        
+        if file is not None:
+            header: Header = file.get_header()
+        
+        return header[self.exptime_kw]
 
 
     def get_filter(
@@ -409,6 +498,52 @@ class Instrument(ABC):
         return float(header[self.read_noise_kw])
 
 
+    def get_relative_scintillation_noise(
+        self,
+        file: MEFSlice | None = None,
+        header: Header | None = None,
+        C: float = 1.5,
+        H: Quantity = 8000 * u.m,
+        ) -> float:
+        """
+        Get the scintillation noise in an image using the approximation of Young 1967
+        (https://ui.adsabs.harvard.edu/abs/1967AJ.....72..747Y/abstract) as refined by Osborn+2015
+        (https://ui.adsabs.harvard.edu/abs/2015MNRAS.452.1707O/abstract). See Osborn+2015 for details on implementing a
+        more rigorous scintillation noise treatment for your particular instrument.
+        
+        Parameters
+        ----------
+        file : MEFSlice | None, optional
+            The `MEFSlice` instance corresponding to the file, by default `None`. If `None`, a `Header` must be passed 
+            to `header` instead.
+        header : Header, optional
+            The header of the FITS file, by default `None`. If `None`, a `MEFSlice` must be passed to `file` instead.
+        C : float, optional
+            The empirical correction coefficient, by default 1.5 (see, e.g., Table 1 of Osborn+2015).
+        H : Quantity, optional
+            The scale-height of the atmosphere, by default 8000 m (e.g., Young 1967).
+        
+        Returns
+        -------
+        float
+            The relative scintillation noise.
+        """
+        
+        if file is not None:
+            header: Header = file.get_header()
+        
+        airmass = self.get_airmass(header=header)
+        t = self.get_exptime(header=header)
+        
+        h = self.location.height.to_value(u.m)
+        
+        D = self.diameter.to_value(u.m)
+        
+        H_value = H.to_value(u.m)
+        
+        return float(C * np.sqrt(airmass**3 * np.exp(-2 * h / H_value) / (1e5 * D**(4 / 3) * t)))
+
+
     @classmethod
     def from_json(
         cls,
@@ -461,9 +596,13 @@ class Instrument(ABC):
             height=config['height'],
             )
         
+        diameter = config['diameter'] * u.m
+        
         return cls(
             location=location,
+            diameter=diameter,
             pixel_scales=config['pixel_scales'],
+            airmass_kw=config['airmass_kw'],
             read_noise_kw=config['read_noise_kw'],
             binning_kw=config['binning_kw'],
             dark_curr_kw=config['dark_curr_kw'],
@@ -506,7 +645,9 @@ class Instrument(ABC):
         template['longitude'] = self.location.lon.to_value(u.deg)
         template['latitude'] = self.location.lat.to_value(u.deg)
         template['height'] = self.location.height.to_value(u.m)
+        template['diameter'] = self.diameter.to_value(u.m),
         template['pixel_scales'] = self.pixel_scales
+        template['airmass_kw'] = self.airmass_kw
         template['read_noise_kw'] = self.read_noise_kw
         template['binning_kw'] = self.binning_kw
         template['dark_curr_kw'] = self.dark_curr_kw
@@ -564,14 +705,18 @@ def create_template() -> dict[str, Any]:
         'latitude': 0.0,
         '_latitude_description': 'The latitude of the observatory in degrees.',
         'height': 0.0,
-        '_height_description': 'The height of the observatory in meters.',
+        '_height_description': 'The height of the observatory in metres.',
+        'diameter': 0.0,
+        '_diameter_description': "The diameter of the telescope's aperture in metres.",
         'pixel_scales': {
-            'filter_1': 0.0,
-            'filter_2': 0.0,
+            'camera_1': 0.0,
+            'camera_2': 0.0,
             },
         '_pixel_scales_description': 'The pixel-scale in arcsec/pixel for each filter.',
+        'airmass_kw': 'AIRMASS',
+        '_airmass_kw_description': "The header keyword that corresponds to the observation's airmass.",
         'read_noise_kw': 'RDNOISE',
-        '_read_noise_description': "The header keyword that corresponds to the detector's readout noise in electrons/pixel.",
+        '_read_noise_kw_description': "The header keyword that corresponds to the detector's readout noise in electrons/pixel.",
         'binning_kw': 'BINNING',
         '_binning_kw_description': 'The header keyword that corresponds to the binning mode.',
         'dark_curr_kw': 'DARKCURR',
@@ -600,41 +745,66 @@ class OPTICAM_MX(Instrument):
 
 
     def __init__(
-        self, 
-        location = EarthLocation.from_geodetic(
-            lon=-115.463611 * u.deg,
-            lat=31.044167 * u.deg,
-            height=2790 * u.m,
-            ),
-        pixel_scales = {
-            '1': 0.1397,
-            '2': 0.1406,
-            '3': 0.1661,
-            },
-        dateobs_kw='UT',
-        exptime_kw='EXPOSURE',
+        self,
         ) -> None:
         """
         Interface for the OAN-SPM OPTICAM instrument.
-        
-        Parameters
-        ----------
-        location : EarthLocation
-            The location of the observatory.
-        pixel_scales : dict
-            The instrument's pixel scales.
-        dateobs_kw : str
-            The observation date keyword.
-        exptime_kw : str
-            The exposure time keyword.
         """
         
         return super().__init__(
-            location=location,
-            pixel_scales=pixel_scales,
-            exptime_kw=exptime_kw,
-            dateobs_kw=dateobs_kw,
+            diameter=2.1 * u.m,
+            location=EarthLocation.from_geodetic(
+                lon=-115.463611 * u.deg,
+                lat=31.044167 * u.deg,
+                height=2790 * u.m,
+                ),
+            pixel_scales={
+                '1': 0.1397,
+                '2': 0.1406,
+                '3': 0.1661,
+                },
+            exptime_kw='EXPOSURE',
+            dateobs_kw='UT',
             )
+
+
+    def get_airmass(
+        self,
+        file: MEFSlice | None = None,
+        header: Header | None = None,
+        ) -> float:
+        """
+        OPTICAM headers contain a fixed airmass. Here, we estimate the time-dependent airmass. If the airmass cannot be
+        estimate (e.g., due to missing coordinate info), the airmass is set to 0.
+        
+        Parameters
+        ----------
+        file : MEFSlice | None, optional
+            The `MEFSlice` instance corresponding to the file, by default `None`. If `None`, a `Header` must be passed
+            to `header` instead.
+        header : Header, optional
+            The header of the FITS file, by default `None`. If `None`, a `MEFSlice` must be passed to `file` instead.
+        
+        Returns
+        -------
+        float
+            The airmass of the image.
+        """
+        
+        if file is not None:
+            header: Header = file.get_header()
+        
+        try:
+            sky_coord = self.get_sky_coord(header=header)
+            time = Time(self.get_mjd(header=header), format='mjd')
+        except:
+            return 0.
+        
+        return float(compute_airmass(
+            coords=sky_coord,
+            times=time,
+            observatory=self.location,
+            ))
 
 
     def get_mjd(
@@ -698,7 +868,43 @@ class OPTICAM_MX(Instrument):
         header: Header | None = None,
         ) -> float:
         
-        return 1.1
+        return 1.3
+
+
+    def get_relative_scintillation_noise(
+        self,
+        file: MEFSlice | None = None,
+        header: Header | None = None,
+        C: float = 1.67,
+        H: Quantity = 8000 * u.m,
+        ) -> float:
+        """
+        Get the scintillation noise in an image using the approximation of Young 1967
+        (https://ui.adsabs.harvard.edu/abs/1967AJ.....72..747Y/abstract) as refined by Osborn+2015
+        (https://ui.adsabs.harvard.edu/abs/2015MNRAS.452.1707O/abstract). See Osborn+2015 for details on implementing a
+        more rigorous scintillation noise treatment.
+        
+        Parameters
+        ----------
+        file : MEFSlice | None, optional
+            The `MEFSlice` instance corresponding to the file, by default `None`. If `None`, a `Header` must be passed 
+            to `header` instead.
+        header : Header, optional
+            The header of the FITS file, by default `None`. If `None`, a `MEFSlice` must be passed to `file` instead.
+        C : float, optional
+            The empirical correction coefficient. At OAN-SPM, this value was found to be 1.67 (Osborn+2015).
+        H : Quantity, optional
+            The scale-height of the atmosphere, by default 8000 m (e.g., Young 1967).
+        
+        Returns
+        -------
+        float
+            The relative scintillation noise.
+        """
+        
+        
+        return super().get_relative_scintillation_noise(file=file, header=header, C=C, H=H)
+
 
 
 
@@ -709,6 +915,7 @@ class OPTICAM_MX_UNKNOWN(OPTICAM_MX):
     def __init__(
         self,
         ):
+        
         super().__init__(dateobs_kw='GPSTIME')
 
 
@@ -721,37 +928,23 @@ class MEXMAN(Instrument):
     
     def __init__(
         self,
-        location: EarthLocation = EarthLocation.from_geodetic(
-            lon=-115.463611 * u.deg,
-            lat=31.044167 * u.deg,
-            height=2790 * u.m,
-            ),
-        pixel_scales: dict[str, float] = {
-            'MEXMAN': 0.24645,
-            },
-        dateobs_kw: str = 'JD',
-        binning_kw: str = 'CCDSUM',
         ) -> None:
         """
         Interface for the OAN-SPM MEXMAN instrument.
-        
-        Parameters
-        ----------
-        location : EarthLocation
-            The location of the observatory.
-        pixel_scales : dict
-            The instrument's pixel scale.
-        dateobs_kw : str, optional
-            The observation date keyword.
-        binning_kw : str, optional
-            The binning keyword.
         """
         
         return super().__init__(
-            location=location,
-            pixel_scales=pixel_scales,
-            dateobs_kw=dateobs_kw,
-            binning_kw=binning_kw,
+            diameter=0.84 * u.m,
+            location=EarthLocation.from_geodetic(
+                lon=-115.463611 * u.deg,
+                lat=31.044167 * u.deg,
+                height=2790 * u.m,
+                ),
+            pixel_scales={
+                'MEXMAN': 0.24645,
+                },
+            dateobs_kw='JD',
+            binning_kw='CCDSUM',
             )
 
 
@@ -810,6 +1003,40 @@ class MEXMAN(Instrument):
         jd = header[self.dateobs_kw]
         
         return Time(jd, format='jd').mjd
+
+
+    def get_relative_scintillation_noise(
+        self,
+        file: MEFSlice | None = None,
+        header: Header | None = None,
+        C: float = 1.67,
+        H: Quantity = 8000 * u.m,
+        ) -> float:
+        """
+        Get the relative scintillation noise in an image using the approximation of Young 1967
+        (https://ui.adsabs.harvard.edu/abs/1967AJ.....72..747Y/abstract) as refined by Osborn+2015
+        (https://ui.adsabs.harvard.edu/abs/2015MNRAS.452.1707O/abstract).
+        
+        Parameters
+        ----------
+        file : MEFSlice | None, optional
+            The `MEFSlice` instance corresponding to the file, by default `None`. If `None`, a `Header` must be passed 
+            to `header` instead.
+        header : Header, optional
+            The header of the FITS file, by default `None`. If `None`, a `MEFSlice` must be passed to `file` instead.
+        C : float, optional
+            The empirical correction coefficient. At OAN-SPM, this value was found to be 1.67 (Osborn+2015).
+        H : Quantity, optional
+            The scale-height of the atmosphere, by default 8000 m (e.g., Young 1967).
+        
+        Returns
+        -------
+        float
+            The relative scintillation noise.
+        """
+        
+        
+        return super().get_relative_scintillation_noise(file=file, header=header, C=C, H=H)
 
 
 

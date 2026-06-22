@@ -1,6 +1,6 @@
 # Documentation
 
-To generate the Sphinx documentation for `opticam`, install the package with its documentation requirements:
+To generate the Sphinx documentation for `phoptic`, install the package with its documentation requirements:
 
 ```
 pip install -e .[docs]

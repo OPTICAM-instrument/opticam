@@ -4,7 +4,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 
-from opticam.instruments import Instrument
+from phoptic.instruments import Instrument
 
 
 def apply_barycentric_correction(

@@ -1,19 +1,21 @@
+import os.path
 from pathlib import Path
+from typing import Callable
 
 
 from astropy.io import fits
+from astropy.io.fits import Header
 from ccdproc import cosmicray_lacosmic
 import numpy as np
 from numpy.typing import NDArray
-import os.path
 
 
-from opticam.correctors import BiasCorrector, DarkNoiseCorrector, FlatFieldCorrector
-from opticam.mef_slice import MEFSlice
-from opticam.timing.helpers import apply_barycentric_correction
-from opticam.utils.helpers import camera_and_filter_key
-from opticam.utils.image_helpers import rebin_image
-from opticam.instruments import Instrument
+from phoptic.correctors import BiasCorrector, DarkNoiseCorrector, FlatFieldCorrector
+from phoptic.mef_slice import MEFSlice
+from phoptic.timing.helpers import apply_barycentric_correction
+from phoptic.utils.helpers import camera_and_filter_key
+from phoptic.utils.image_helpers import rebin_image
+from phoptic.instruments import Instrument
 
 
 
@@ -42,7 +44,7 @@ def get_header_info(
     """
     
     header = file.get_header()
-    exposure = float(header[instrument.exptime_kw])
+    exposure = instrument.get_exptime(header=header)
     camera = instrument.get_camera(header=header)
     fltr = instrument.get_filter(header=header)
     binning = instrument.get_binning(header=header)
@@ -63,15 +65,15 @@ def get_data(
     file: MEFSlice,
     instrument: Instrument,
     rebin_factor: int,
+    image_filter: Callable[[NDArray[np.float64]], NDArray[np.float64]] | None,
     remove_cosmic_rays: bool,
     bias_corrector: BiasCorrector | None = None,
     dark_corrector: DarkNoiseCorrector | None = None,
     flat_corrector: FlatFieldCorrector | None = None,
     ) -> tuple[
         NDArray[np.float64],
-        float | NDArray[np.float64],
-        float | NDArray[np.float64],
-        float | NDArray[np.float64],
+        Header,
+        dict[str, float | NDArray]
         ]:
     """
     Get the (calibrated) image data from a file.
@@ -84,6 +86,8 @@ def get_data(
         The instrument that created the file.
     rebin_factor : int
         The image rebinning factor.
+    image_filter : Callable[[NDArray[np.float64]], NDArray[np.float64]] | None
+        The filter to apply to the image as it is opened.
     remove_cosmic_rays : bool
         Whether to remove cosmic rays from the image.
     bias_corrector : BiasCorrector | None, optional
@@ -95,15 +99,19 @@ def get_data(
     
     Returns
     -------
-    Tuple[NDArray[np.float64], float | NDArray[np.float64], float | NDArray[np.float64], float | NDArray[np.float64]]
-        The corrected image and the master bias, dark, and flat variances. If any of the correctors are undefined,
-        the variance of that corrector is set to 0.
+    Tuple[NDArray[np.float64], Header, dict[str, float | NDArray]]
+        The corrected image, the image header, and the noise dictionary.
     """
     
     data, header = file.get_data_and_header()
     camera = instrument.get_camera(header=header)
     fltr = instrument.get_filter(header=header)
     key = camera_and_filter_key(camera, fltr)
+    
+    if image_filter is not None:
+        data = image_filter(data)
+    
+    noise_dict: dict[str, float | NDArray] = {}
     
     ################################################# bias correction #################################################
     
@@ -114,6 +122,8 @@ def get_data(
             )
     else:
         bias_var = 0.
+    
+    noise_dict['bias_var'] = bias_var
     
     ############################################## dark noise correction ##############################################
     
@@ -126,6 +136,8 @@ def get_data(
     else:
         dark_var = 0.
     
+    noise_dict['dark_var'] = dark_var
+    
     ############################################## flat-field correction ##############################################
     
     if flat_corrector is not None:
@@ -136,6 +148,8 @@ def get_data(
     else:
         flat_var = 0.
     
+    noise_dict['flat_var'] = flat_var
+    
     ################################################# clip cosmic rays #################################################
     
     if remove_cosmic_rays:
@@ -144,9 +158,11 @@ def get_data(
     ###################################################### rebin ######################################################
     
     if rebin_factor > 1:
-        data = rebin_image(data, rebin_factor)
+        data = rebin_image(image=data, factor=rebin_factor)
     
-    return data, bias_var, dark_var, flat_var
+    noise_dict['rel_scint_noise'] = instrument.get_relative_scintillation_noise(header=header)
+    
+    return data, header, noise_dict
 
 
 def save_stacked_images(

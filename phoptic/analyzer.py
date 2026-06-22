@@ -9,17 +9,16 @@ import astropy.units as u
 from astropy.units.quantity import Quantity
 import numpy as np
 from numpy.typing import NDArray
-from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
 from stingray import Lightcurve
 
 
-from opticam.plotting.helpers import scale_ax
-from opticam.plotting.plots import plot_light_curves
-from opticam.timing.timeseries import get_lc, infer_gtis
-from opticam.utils.helpers import sort_filters
-from opticam.utils.helpers import save_figure
+from phoptic.plotting.helpers import scale_ax
+from phoptic.plotting.plots import plot_light_curves
+from phoptic.timing.timeseries import get_lc, infer_gtis
+from phoptic.utils.helpers import sort_filters
+from phoptic.utils.helpers import save_figure
 
 
 
@@ -34,7 +33,7 @@ class Analyzer:
         self,
         out_directory: Path | str,
         light_curves: TimeSeries | None = None,
-        norm: Literal['max', 'mean', 'none'] = 'mean',
+        norm: Literal['max', 'mean', 'none'] = 'none',
         prefix: str | None = None,
         phot_label: str | None = None,
         show_plots: bool = True,
@@ -395,7 +394,7 @@ class Analyzer:
         frequency : Quantity | None, optional
             The frequency grid, by default `None`. If `None`, the `autofrequency()` method of `astropy`'s `LombScargle`
             class is used to generate a frequency grid.
-        scale : Literal[&#39;linear&#39;, &#39;semilogx&#39;, &#39;semilogy&#39;, &#39;loglog&#39;], optional
+        scale : Literal["linear", "semilogx", "semilogy", "loglog"], optional
             The scale for the resulting plot, by default `'linear'`.
         save : bool, optional
             Whether to save the resulting plot, by default `True`.
@@ -506,7 +505,7 @@ class Analyzer:
         frequency : Quantity | None, optional
             The frequency grid, by default `None`. If `None`, the `autofrequency()` method of `astropy`'s
             `LombScargleMultiband` class is used to generate a frequency grid.
-        scale : Literal[&#39;linear&#39;, &#39;semilogx&#39;, &#39;semilogy&#39;, &#39;loglog&#39;], optional
+        scale : Literal["linear", "semilogx", "semilogy", "loglog"], optional
             The scale for the resulting plot, by default `'linear'`.
         save : bool, optional
             Whether to save the resulting plot, by default `True`.
@@ -625,7 +624,7 @@ def rebin(
     
     Parameters
     ----------
-    method : Literal[&#39;mean&#39;, &#39;sum&#39;]
+    method : Literal["mean", "sum"]
         The rebinning method. 
     light_curves : Table | TimeSeries | QTable
         The light curves being rebinned.
@@ -855,7 +854,7 @@ def validate_light_curves(
     ----------
     light_curves : TimeSeries | None
         The light curves.
-    norm : Literal[&#39;max&#39;, &#39;mean&#39;, &#39;none&#39;]
+    norm : Literal["max", "mean", "none"]
         The normalisation.
     keys : list[str]
         The light curve keys.

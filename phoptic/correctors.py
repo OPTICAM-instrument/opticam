@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Callable
 
 
 from astropy.io import fits
@@ -7,11 +8,11 @@ import numpy as np
 from numpy.typing import NDArray
 
 
-from opticam.instruments import Instrument, OPTICAM_MX
-from opticam.mef_slice import create_file_paths, MEFSlice
-from opticam.utils.helpers import camera_and_filter_key, camera_key
-from opticam.utils.image_helpers import rebin_image
-from opticam.utils.logging import log_file
+from phoptic.instruments import Instrument, OPTICAM_MX
+from phoptic.mef_slice import create_file_paths, MEFSlice
+from phoptic.utils.helpers import camera_and_filter_key, camera_key
+from phoptic.utils.image_helpers import rebin_image
+from phoptic.utils.logging import log_file
 
 
 
@@ -28,6 +29,7 @@ class Corrector(ABC):
         data_directory: Path | str | None = None,
         instrument: Instrument = OPTICAM_MX(),
         rebin_factor: int = 1,
+        image_filter: Callable[[NDArray[np.float64]], NDArray[np.float64]] | None = None,
         *args,
         **kwargs,
         ) -> None:
@@ -46,6 +48,11 @@ class Corrector(ABC):
         rebin_factor : int, optional
             The factor by which to rebin the data, by default 1. Useful if, for example, calibration images were taken
             in a lower binning mode than the observations.
+        image_filter : Callable[[NDArray[np.float64]], NDArray[np.float64]] | None, optional
+            The kernel/filter to apply to calibration images as they are opened. Paez+2026:
+            https://ui.adsabs.harvard.edu/abs/2026RASTI...5ag021P/abstract found that a 3x3 median filter
+            (e.g., `scipy.ndimage.median_filter()`) can be used to correct for warm pixels in long exposures (> 10 s)
+            with OPTICAM.
         """
         
         self.out_directory = Path(out_directory) if out_directory is not None else None
@@ -54,6 +61,7 @@ class Corrector(ABC):
         
         assert isinstance(rebin_factor, int), "[OPTICAM] Non-integer rebin factors are not supported!"
         self.rebin_factor = rebin_factor
+        self.image_filter = image_filter
         
         if self.out_directory is not None:
             if not self.out_directory.is_dir():
@@ -341,8 +349,11 @@ class BiasCorrector(Corrector):
             for bias_path in self.data_files[camera]:
                 bias = bias_path.get_data()
                 
+                if self.image_filter is not None:
+                    bias = self.image_filter(bias)
+                
                 if self.rebin_factor > 1:
-                    bias = rebin_image(bias, self.rebin_factor)
+                    bias = rebin_image(image=bias, factor=self.rebin_factor)
                 
                 biases.append(bias)
             
@@ -507,6 +518,7 @@ class DarkNoiseCorrector(Corrector):
         data_directory: Path | str | None = None,
         instrument: Instrument = OPTICAM_MX(),
         rebin_factor: int = 1,
+        image_filter: Callable[[NDArray[np.float64]], NDArray[np.float64]] | None = None,
         bias_corrector: BiasCorrector | None = None,
         ) -> None:
         """
@@ -524,6 +536,11 @@ class DarkNoiseCorrector(Corrector):
         rebin_factor : int, optional
             The factor by which to rebin the data, by default 1. Useful if, for example, calibration images were taken
             using a higher resolution than the science images.
+        image_filter : Callable[[NDArray[np.float64]], NDArray[np.float64]] | None, optional
+            The kernel/filter to apply to calibration images as they are opened. Paez+2026:
+            https://ui.adsabs.harvard.edu/abs/2026RASTI...5ag021P/abstract found that a 3x3 median filter
+            (e.g., `scipy.ndimage.median_filter()`) can be used to correct for warm pixels in long exposures (> 10 s)
+            with OPTICAM.
         bias_corrector : BiasCorrector | None, optional
             The bias corrector to use to bias-correct the dark images, by default `None`. If `None`, no bias
             corrections are performed.
@@ -536,6 +553,7 @@ class DarkNoiseCorrector(Corrector):
                          data_directory=data_directory,
                          instrument=instrument,
                          rebin_factor=rebin_factor,
+                         image_filter=image_filter,
                          )
 
 
@@ -629,8 +647,11 @@ class DarkNoiseCorrector(Corrector):
             for dark_file in self.data_files[key]:
                 dark = dark_file.get_data()
                 
+                if self.image_filter is not None:
+                    dark = self.image_filter(dark)
+                
                 if self.rebin_factor > 1:
-                    dark = rebin_image(dark, self.rebin_factor)
+                    dark = rebin_image(image=dark, factor=self.rebin_factor, )
                 
                 # apply bias correction
                 if self.bias_corrector is not None:
@@ -822,6 +843,7 @@ class FlatFieldCorrector(Corrector):
         data_directory: Path | str | None = None,
         instrument: Instrument = OPTICAM_MX(),
         rebin_factor: int = 1,
+        image_filter: Callable[[NDArray[np.float64]], NDArray[np.float64]] | None = None,
         bias_corrector: BiasCorrector | None = None,
         dark_corrector: DarkNoiseCorrector | None = None,
         ) -> None:
@@ -840,6 +862,11 @@ class FlatFieldCorrector(Corrector):
         rebin_factor : int, optional
             The factor by which to rebin the data, by default 1. Useful if, for example, calibration images were taken
             using a higher resolution than the science images.
+        image_filter : Callable[[NDArray[np.float64]], NDArray[np.float64]] | None, optional
+            The kernel/filter to apply to calibration images as they are opened. Paez+2026:
+            https://ui.adsabs.harvard.edu/abs/2026RASTI...5ag021P/abstract found that a 3x3 median filter
+            (e.g., `scipy.ndimage.median_filter()`) can be used to correct for warm pixels in long exposures (> 10 s)
+            with OPTICAM.
         bias_corrector : BiasCorrector | None, optional
             The bias corrector to use to bias-correct the flat-field images, by default `None`. If `None`, no bias
             corrections are performed.
@@ -856,6 +883,7 @@ class FlatFieldCorrector(Corrector):
                          data_directory=data_directory,
                          instrument=instrument,
                          rebin_factor=rebin_factor,
+                         image_filter=image_filter,
                          )
 
 
@@ -953,8 +981,11 @@ class FlatFieldCorrector(Corrector):
             for flat_file in self.data_files[key]:
                 flat, header = flat_file.get_data_and_header()
                 
+                if self.image_filter is not None:
+                    flat = self.image_filter(flat)
+                
                 if self.rebin_factor > 1:
-                    flat = rebin_image(flat, self.rebin_factor)
+                    flat = rebin_image(image=flat, factor=self.rebin_factor)
                 
                 if self.bias_corrector is not None:
                     flat, bias_var = self.bias_corrector.correct(

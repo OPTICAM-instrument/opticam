@@ -8,9 +8,9 @@ from numpy.typing import NDArray
 from photutils.aperture import aperture_photometry, EllipticalAperture
 
 
-from opticam.background.local_background import BaseLocalBackground
-from opticam.utils.constants import fwhm_scale
-from opticam.utils.helpers import camel_to_snake, propagate_errors
+from phoptic.background.local_background import BaseLocalBackground
+from phoptic.utils.constants import fwhm_scale
+from phoptic.utils.helpers import camel_to_snake, combine_variances
 
 
 
@@ -24,7 +24,7 @@ class BasePhotometer(ABC):
     def __init__(
         self,
         forced: bool = False,
-        source_matching_tolerance: float = 5.,
+        source_matching_tolerance: float = 3.,
         local_background_estimator: BaseLocalBackground | Callable | None = None,
         ):
         """
@@ -37,7 +37,7 @@ class BasePhotometer(ABC):
             are used to perform photometry, even in images where the source is not detected, and the resulting light
             curves will be saved with a 'forced' prefix.
         source_matching_tolerance : float, optional
-            The tolerance for source position matching in standard deviations (assuming a Gaussian PSF), by default 5.
+            The tolerance for source position matching in standard deviations (assuming a Gaussian PSF), by default 3.
             This parameter defines how far from the transformed catalogue position a source can be while still being
             considered the same source.
         local_background_estimator : BaseLocalBackground | Callable | None, optional
@@ -66,6 +66,7 @@ class BasePhotometer(ABC):
         image_coords: NDArray | None,
         psf_params: Dict[str, float],
         read_noise: float,
+        rel_scint_noise: float,
         ) -> Dict[str, List]:
         """
         Compute the fluxes of the catalogued sources from the given image.
@@ -89,10 +90,12 @@ class BasePhotometer(ABC):
             image to sources in the catalogue.
         psf_params : Dict[str, float]
             The PSF parameters for the camera used to take the image. This parameter is defined in the catalogue and
-            has the following keys: 'semimajor_sigma' (in pixels), 'semiminor_sigma' (in pixels), and 'orientation' (in
+            has the following keys: 'semimajor_axis' (in pixels), 'semiminor_axis' (in pixels), and 'orientation' (in
             *degrees*).
         read_noise : float
             The detector's read noise.
+        rel_scint_noise : float
+            The relative scintillation noise.
         
         Returns
         -------
@@ -123,7 +126,7 @@ class BasePhotometer(ABC):
             The source index.
         psf_params : Dict[str, float]
             The PSF parameters for the camera used to take the image. This parameter is defined in the catalogue and
-            has the following keys: 'semimajor_sigma' (in pixels), 'semiminor_sigma' (in pixels), and 'orientation' (in
+            has the following keys: 'semimajor_axis' (in pixels), 'semiminor_axis' (in pixels), and 'orientation' (in
             *degrees*).
         
         Returns
@@ -163,7 +166,7 @@ class BasePhotometer(ABC):
             The source index.
         psf_params : Dict[str, float]
             The PSF parameters for the camera used to take the image. This parameter is defined in the catalogue and
-            has the following keys: 'semimajor_sigma' (in pixels), 'semiminor_sigma' (in pixels), and 'orientation' (in
+            has the following keys: 'semimajor_axis' (in pixels), 'semiminor_axis' (in pixels), and 'orientation' (in
             *degrees*).
         
         Returns
@@ -179,7 +182,7 @@ class BasePhotometer(ABC):
         distances = np.sqrt((image_coords[:, 0] - cat_coords[source_index][0])**2 + (image_coords[:, 1] - cat_coords[source_index][1])**2)
         
         # if the closest source is further than the specified tolerance
-        if np.min(distances) > self.source_matching_tolerance * np.sqrt(psf_params['semimajor_sigma']**2 + psf_params['semiminor_sigma']**2):
+        if np.min(distances) > self.source_matching_tolerance * np.sqrt(psf_params['semimajor_axis']**2 + psf_params['semiminor_axis']**2):
             return None
         else:
             # get the position of the closest source (assumed to be the source of interest)
@@ -253,6 +256,7 @@ class BasePhotometer(ABC):
         position: NDArray,
         psf_params: Dict[str, float],
         read_noise: float,
+        rel_scint_noise: float,
         ) -> Dict[str, List]:
         """
         Populate the results dictionary with the computed flux, flux error, and background (if applicable) using the
@@ -280,10 +284,12 @@ class BasePhotometer(ABC):
             The position of the source in the image.
         psf_params : Dict[str, float]
             The PSF parameters for the camera used to take the image. This parameter is defined in the catalogue and
-            has the following keys: 'semimajor_sigma' (in pixels), 'semiminor_sigma' (in pixels), and 'orientation' (in
+            has the following keys: 'semimajor_axis' (in pixels), 'semiminor_axis' (in pixels), and 'orientation' (in
             *degrees*).
         read_noise : float
             The detector's read noise.
+        rel_scint_noise : float
+            The relative scintillation noise.
         
         Returns
         -------
@@ -301,6 +307,7 @@ class BasePhotometer(ABC):
                 position=position,
                 psf_params=psf_params,
                 read_noise=read_noise,
+                rel_scint_noise=rel_scint_noise,
             )
             
             results['flux'].append(flux)
@@ -315,6 +322,7 @@ class BasePhotometer(ABC):
                 position=position,
                 psf_params=psf_params,
                 read_noise=read_noise,
+                rel_scint_noise=rel_scint_noise,
             )
             
             results['flux'].append(flux)
@@ -362,7 +370,7 @@ class AperturePhotometer(BasePhotometer):
         semiminor_axis: int | None = None,
         orientation: float | None = None,
         forced: bool = False,
-        source_matching_tolerance: float = 5.,
+        source_matching_tolerance: float = 3.,
         local_background_estimator: None | BaseLocalBackground = None,
         ):
         """
@@ -381,7 +389,7 @@ class AperturePhotometer(BasePhotometer):
             are used to perform photometry, even in images where the source is not detected, and the resulting light
             curves will be saved with a 'forced' prefix.
         source_matching_tolerance : float, optional
-            The tolerance for source position matching in standard deviations (assuming a Gaussian PSF), by default 5.
+            The tolerance for source position matching in standard deviations (assuming a Gaussian PSF), by default 3.
             This parameter defines how far from the transformed catalogue position a source can be while still being
             considered the same source.
         local_background_estimator : None | BaseLocalBackground, optional
@@ -411,6 +419,7 @@ class AperturePhotometer(BasePhotometer):
         image_coords: NDArray | None,
         psf_params: Dict[str, float],
         read_noise: float,
+        rel_scint_noise: float,
         ) -> Dict[str, List]:
         """
         Compute the fluxes of the catalogued sources from the given image.
@@ -434,10 +443,12 @@ class AperturePhotometer(BasePhotometer):
             image to sources in the catalogue.
         psf_params : Dict[str, float]
             The PSF parameters for the camera used to take the image. This parameter is defined in the catalogue and
-            has the following keys: 'semimajor_sigma' (in pixels), 'semiminor_sigma' (in pixels), and 'orientation' (in
+            has the following keys: 'semimajor_axis' (in pixels), 'semiminor_axis' (in pixels), and 'orientation' (in
             *degrees*).
         read_noise : float
             The detector's read noise.
+        rel_scint_noise : float
+            The relative scintillation noise.
         
         Returns
         -------
@@ -474,6 +485,7 @@ class AperturePhotometer(BasePhotometer):
                 position=position,
                 psf_params=psf_params,
                 read_noise=read_noise,
+                rel_scint_noise=rel_scint_noise,
                 )
         
         return results
@@ -489,6 +501,7 @@ class AperturePhotometer(BasePhotometer):
         position: NDArray,
         psf_params: Dict[str, float],
         read_noise: float,
+        rel_scint_noise: float,
         ) -> Tuple[float, float] | Tuple[float, float, float, float]:
         """
         Compute the aperture flux of a source in the image.
@@ -509,10 +522,12 @@ class AperturePhotometer(BasePhotometer):
             The position of the source.
         psf_params : Dict[str, float]
             The PSF parameters for the camera used to take the image. This parameter is defined in the catalogue and
-            has the following keys: 'semimajor_sigma' (in pixels), 'semiminor_sigma' (in pixels), and 'orientation' (in
+            has the following keys: 'semimajor_axis' (in pixels), 'semiminor_axis' (in pixels), and 'orientation' (in
             *degrees*).
         read_noise : float
             The instrument's read noise.
+        rel_scint_noise : float
+            The relative scintillation noise.
         
         Returns
         -------
@@ -527,7 +542,7 @@ class AperturePhotometer(BasePhotometer):
             )
         
         if self.local_background_estimator is None:
-            error = propagate_errors(
+            total_var = combine_variances(
                 data=image,
                 bias_var=bias_var,
                 dark_var=dark_var,
@@ -535,10 +550,11 @@ class AperturePhotometer(BasePhotometer):
                 background_rms=np.asarray(background_rms),
                 read_noise=read_noise,
                 )
-            phot_table = aperture_photometry(image, aperture, error=error)
             
-            flux = float(phot_table["aperture_sum"].value[0])  # type: ignore
-            flux_err = float(phot_table["aperture_sum_err"].value[0])  # type: ignore
+            phot_table = aperture_photometry(image, aperture, error=np.sqrt(total_var))
+            
+            flux = phot_table["aperture_sum"].value[0]
+            flux_err = np.sqrt(phot_table["aperture_sum_err"].value[0]**2 + (rel_scint_noise * flux)**2)
             
             return flux, flux_err
         else:
@@ -546,13 +562,13 @@ class AperturePhotometer(BasePhotometer):
             local_background, local_background_rms = self.local_background_estimator(
                 image,
                 position,
-                psf_params['semimajor_sigma'],
-                psf_params['semiminor_sigma'],
+                psf_params['semimajor_axis'],
+                psf_params['semiminor_axis'],
                 psf_params['orientation'],
                 )
             
             data_clean = image - local_background
-            error = propagate_errors(
+            total_var = combine_variances(
                 data=data_clean,
                 bias_var=bias_var,
                 dark_var=dark_var,
@@ -561,10 +577,10 @@ class AperturePhotometer(BasePhotometer):
                 read_noise=read_noise,
             )
             
-            phot_table = aperture_photometry(data_clean, aperture, error=error)
+            phot_table = aperture_photometry(data_clean, aperture, error=np.sqrt(total_var))
             
-            flux = float(phot_table["aperture_sum"].value[0])  # type: ignore
-            flux_err = float(phot_table["aperture_sum_err"].value[0])  # type: ignore
+            flux = phot_table["aperture_sum"].value[0]
+            flux_err = np.sqrt(phot_table["aperture_sum_err"].value[0]**2 + (rel_scint_noise * flux)**2)
             
             return flux, flux_err, float(local_background), float(local_background_rms)
 
@@ -577,17 +593,17 @@ class AperturePhotometer(BasePhotometer):
         
         if self.semimajor_axis is not None and self.semiminor_axis is not None and self.orientation is not None:
             return EllipticalAperture(
-                position,
-                self.semimajor_axis,
-                self.semiminor_axis,
-                self.orientation,
+                positions=position,
+                a=self.semimajor_axis,
+                b=self.semiminor_axis,
+                theta=self.orientation,
                 )
         else:
             return EllipticalAperture(
-                position,
-                fwhm_scale * psf_params['semimajor_sigma'],
-                fwhm_scale * psf_params['semiminor_sigma'],
-                psf_params['orientation'],
+                positions=position,
+                a=fwhm_scale * psf_params['semimajor_axis'],
+                b=fwhm_scale * psf_params['semiminor_axis'],
+                theta=psf_params['orientation'],
                 )
 
 
@@ -634,6 +650,7 @@ class OptimalPhotometer(BasePhotometer):
         image_coords: NDArray | None,
         psf_params: Dict[str, float],
         read_noise: float,
+        rel_scint_noise: float,
         ) -> Dict[str, List]:
         """
         Compute the fluxes of the catalogued sources from the given image.
@@ -657,10 +674,12 @@ class OptimalPhotometer(BasePhotometer):
             image to sources in the catalogue.
         psf_params : Dict[str, float]
             The PSF parameters for the camera used to take the image. This parameter is defined in the catalogue and
-            has the following keys: 'semimajor_sigma' (in pixels), 'semiminor_sigma' (in pixels), and 'orientation' (in
+            has the following keys: 'semimajor_axis' (in pixels), 'semiminor_axis' (in pixels), and 'orientation' (in
             *degrees*).
         read_noise : float
             The detector's read noise.
+        rel_scint_noise : float
+            The relative scintillation noise.
         
         Returns
         -------
@@ -694,6 +713,7 @@ class OptimalPhotometer(BasePhotometer):
                 position=position,
                 psf_params=psf_params,
                 read_noise=read_noise,
+                rel_scint_noise=rel_scint_noise,
                 )
         
         return results
@@ -709,6 +729,7 @@ class OptimalPhotometer(BasePhotometer):
         position: NDArray,
         psf_params: Dict[str, float],
         read_noise: float,
+        rel_scint_noise: float,
         ) -> Tuple[float, float] | Tuple[float, float, float, float]:
         """
         Compute the optimal flux of a source in the image as described in Naylor 1998, MNRAS, 296, 339-346.
@@ -729,10 +750,12 @@ class OptimalPhotometer(BasePhotometer):
             The position of the source in the image, given as (y, x) coordinates.
         psf_params : Dict[str, float]
             The PSF parameters for the camera used to take the image. This parameter is defined in the catalogue and
-            has the following keys: 'semimajor_sigma' (in pixels), 'semiminor_sigma' (in pixels), and 'orientation' (in
+            has the following keys: 'semimajor_axis' (in pixels), 'semiminor_axis' (in pixels), and 'orientation' (in
             *degrees*).
         read_noise : float
             The instrument's read noise.
+        rel_scint_noise : float
+            The relative scintillation noise.
         
         Returns
         -------
@@ -751,14 +774,15 @@ class OptimalPhotometer(BasePhotometer):
                 read_noise=read_noise,
                 position=position,
                 psf_params=psf_params,
+                rel_scint_noise=rel_scint_noise,
                 )
         else:
             # estimate local background using annulus
             local_background, local_background_rms = self.local_background_estimator(
                 image,
                 position,
-                psf_params['semimajor_sigma'],
-                psf_params['semiminor_sigma'],
+                psf_params['semimajor_axis'],
+                psf_params['semiminor_axis'],
                 psf_params['orientation'],
                 )
             
@@ -771,6 +795,7 @@ class OptimalPhotometer(BasePhotometer):
                 read_noise=read_noise,
                 position=position,
                 psf_params=psf_params,
+                rel_scint_noise=rel_scint_noise,
                 )
             
             return flux, flux_error, float(local_background), float(local_background_rms)
@@ -836,6 +861,7 @@ def get_optimal_flux_and_error(
     read_noise: float,
     position: NDArray[np.float64],
     psf_params: Dict[str, float],
+    rel_scint_noise: float,
     ) -> Tuple[float, float]:
     """
     Compute the optimal flux and its error.
@@ -858,6 +884,8 @@ def get_optimal_flux_and_error(
         The source position [x, y].
     psf_params : Dict[str, float]
         The PSF parameters.
+    rel_scint_noise : float
+        The relative scintillation noise.
     
     Returns
     -------
@@ -865,7 +893,7 @@ def get_optimal_flux_and_error(
         The flux and its corresponding error.
     """
     
-    error = propagate_errors(
+    total_var = combine_variances(
         data=image,
         bias_var=bias_var,
         dark_var=dark_var,
@@ -875,15 +903,15 @@ def get_optimal_flux_and_error(
         )
     
     weights, norm = get_optimal_weights(
-        var=error**2,
+        var=total_var,
         position=position,
-        psf_major=psf_params['semimajor_sigma'],
-        psf_minor=psf_params['semiminor_sigma'],
+        psf_major=psf_params['semimajor_axis'],
+        psf_minor=psf_params['semiminor_axis'],
         psf_orientation=psf_params['orientation'],
         )
     
-    flux = float(np.sum(image * weights) / norm)
-    flux_error = np.sqrt(1 / norm)
+    flux = np.sum(image * weights) / norm
+    flux_error = np.sqrt(1 / norm + (rel_scint_noise * flux)**2)
     
     return flux, flux_error
 
@@ -937,6 +965,7 @@ def get_growth_curve(
             position=position,
             psf_params={},  # empty dict since not needed
             read_noise=0.,
+            rel_scint_noise=0.
             )[0]
         
         fluxes.append(flux)

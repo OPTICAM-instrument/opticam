@@ -1,4 +1,5 @@
-from astropy.time import Time
+from astropy import units as u
+from astropy.time import Time, TimeDelta
 from astropy.timeseries import TimeSeries
 from astropy.units import Quantity
 import numpy as np
@@ -34,11 +35,14 @@ def get_lc(
     flux_arr = light_curves[flux_col]
     err_arr = light_curves[err_col]
     
-    mask = np.isfinite(flux_arr) & np.isfinite(err_arr)
+    if hasattr(flux_arr, 'mask') and hasattr(err_arr, 'mask'):
+        mask = flux_arr.mask | err_arr.mask
+    else:
+        mask = ~(np.isfinite(flux_arr) & np.isfinite(err_arr))
     
-    new_lc = TimeSeries(time=time_arr[mask])
-    new_lc[flux_col] = flux_arr[mask]
-    new_lc[err_col] = err_arr[mask]
+    new_lc = TimeSeries(time=time_arr[~mask])
+    new_lc[flux_col] = flux_arr[~mask]
+    new_lc[err_col] = err_arr[~mask]
     
     return new_lc
 
@@ -93,7 +97,14 @@ def segment_timeseries(
     -------
     list[TimeSeries]
         The time series segments.
+    
+    Raises
+    ------
+    ValueError
+        If no valid segments could be found.
     """
+    
+    dt = float(np.median(np.diff(ts.time.mjd)))  # nominal time resolution
     
     segments: list[TimeSeries] = []
     
@@ -101,22 +112,25 @@ def segment_timeseries(
     ts_list = split_timeseries_on_gaps(ts)
     
     n: int = get_segment_size(
-        ts=ts_list[0],
+        dt=dt,
         segment_size=segment_size,
         )
     
     for ts in ts_list:
         prev = 0
         while prev + n <= len(ts):
-            segments.append(TimeSeries(ts[prev:prev + n]))
+            segments.append(ts[prev:prev + n])
             prev += n
+    
+    if len(segments) == 0:
+        raise ValueError(f'[OPTICAM] No valid segments were found in the input. Consider reducing segment_size.')
     
     return segments
 
 
 
 def get_segment_size(
-    ts: TimeSeries,
+    dt: float,
     segment_size: Quantity,
     ) -> int:
     """
@@ -124,8 +138,8 @@ def get_segment_size(
     
     Parameters
     ----------
-    ts : TimeSeries
-        The time series.
+    dt : float
+        The nominal time resolution of the time series in days.
     segment_size : Quantity
         The segment size.
     
@@ -135,9 +149,7 @@ def get_segment_size(
         The number of rows per segment.
     """
     
-    dt = np.median(np.diff(ts['time']))
-    
-    return round((segment_size / dt).decompose().value)
+    return round(segment_size.to_value(u.day) / dt)
 
 
 def infer_gtis(
@@ -187,8 +199,102 @@ def infer_gtis(
     return np.array(list(zip(gti_starts, gti_stops)))
 
 
+def uniformly_sampled(
+    time: NDArray,
+    dt: float,
+    raise_error: bool = False,
+    ) -> np.bool:
+    """
+    Check if a time array is uniformly sampled.
+    
+    Parameters
+    ----------
+    time : NDArray
+        The time array (assumed to be in units of seconds).
+    dt : float
+        The nominal time resolution (assumed to be in units of seconds).
+    raise_error : bool, optional
+        Whether to raise an error if the time array is not uniformly sampled, by default `False`.
+    
+    Returns
+    -------
+    np.bool
+        Whether the time array is uniformly sampled.
+    
+    Raises
+    ------
+    ValueError
+        If the time array is not uniformly sampled and `raise_error=True`.
+    """
+    
+    
+    empirical_dt: NDArray = time[1:] - time[:-1]
+    mask = np.isclose(dt, empirical_dt, rtol=1e-6, atol=0.)
+    times_match = np.all(mask)
+    
+    if not times_match and raise_error:
+        indices = np.where(~mask)[0]
+        
+        time_differences = []
+        for index in indices:
+            time_differences.append(str(empirical_dt[index]))
+        
+        raise ValueError(f'[OPTICAM] Irregularly sampled inputs detected.\
+            Time resolution: {dt}, but found time differences of {','.join(time_differences)}')
+    
+    return times_match
 
 
 
-
-
+def segment_arr(
+    t: NDArray,
+    y: NDArray,
+    segment_size: float,
+    y2: NDArray | None = None,
+    tolerance: float = 1.5,
+    ) -> list[tuple]:
+    """
+    Segment arrays into uniform segments.
+    
+    Parameters
+    ----------
+    t : NDArray
+        The time array (in units of seconds).
+    y : NDArray
+        The signal array.
+    segment_size : float
+        The desired time-span of the resulting segments.
+    
+    Returns
+    -------
+    list[tuple[NDArray, NDArray]]
+        The segmented arrays [(t_segment_0, y_segment_0), (t_segment_1, y_segment_1), etc.]
+    """
+    
+    diffs = np.diff(t)
+    dt = np.median(diffs)
+    seg_n = round(segment_size / dt)
+    
+    gap_indices = np.flatnonzero(np.abs(diffs > (tolerance * dt))) + 1  # indices of points AFTER gaps
+    
+    t_chunks = np.split(t, gap_indices)
+    y_chunks = np.split(y, gap_indices)
+    if y2 is not None:
+        y2_chunks = np.split(y2, gap_indices)
+    
+    segments = []
+    for i in range(len(t_chunks)):
+        n = len(t_chunks[i])
+        if n < seg_n:
+            continue
+        n_segments = n // seg_n
+        for j in range(n_segments):
+            t_seg = t_chunks[i][j * seg_n:(j + 1) * seg_n]
+            y_seg = y_chunks[i][j * seg_n:(j + 1) * seg_n]
+            if y2 is not None:
+                y2_seg = y2_chunks[i][j * seg_n:(j + 1) * seg_n]
+                segments.append((t_seg, y_seg, y2_seg))
+            else:
+                segments.append((t_seg, y_seg))
+    
+    return segments

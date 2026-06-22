@@ -1,14 +1,20 @@
+"""
+Collection of random helper functions.
+"""
+
 from pathlib import Path
 import re
 from typing import Any, Dict, List
 
 
+from astropy.coordinates import AltAz, EarthLocation, SkyCoord
+from astropy.time import Time
 import numpy as np
 from numpy.typing import NDArray
 from matplotlib.figure import Figure
 
 
-from opticam.utils.constants import filter_order
+from phoptic.utils.constants import filter_order
 
 
 
@@ -29,7 +35,7 @@ def camel_to_snake(
     str
         The converted snake_case string.
     """
-    
+
     return re.sub(r'(?<!^)(?=[A-Z])', '_', string).lower()
 
 
@@ -141,7 +147,7 @@ def match_dict_keys(
     return new_d
 
 
-def propagate_errors(
+def combine_variances(
     data: NDArray,
     bias_var: float | NDArray[np.float64],
     dark_var: float | NDArray[np.float64],
@@ -150,7 +156,7 @@ def propagate_errors(
     read_noise: float,
     ) -> NDArray[np.float64]:
     """
-    Compute the propagated error image.
+    Compute the propagated variance image.
     
     Parameters
     ----------
@@ -170,17 +176,17 @@ def propagate_errors(
     Returns
     -------
     NDArray[np.float64]
-        The propagated error image.
+        The propagated variance image.
     """
     
-    total_variance = np.clip(data, 0., None)  # source shot noise
+    total_variance = np.clip(data, 0., None)  # shot noise
     total_variance += background_rms**2
     total_variance += read_noise**2
     total_variance += bias_var
     total_variance += dark_var
     total_variance += flat_var
     
-    return np.sqrt(total_variance)
+    return total_variance
 
 
 def camera_and_filter_key(
@@ -271,4 +277,36 @@ def save_figure(
     print(f'[OPTICAM] Plot saved to {Path(path).resolve()}.')
 
 
+def compute_airmass(
+    coords: SkyCoord,
+    times: Time,
+    observatory: EarthLocation,
+    ) -> NDArray:
+    """
+    Estimate the airmass of an observation using the pointing, timestamp, and the location of the observatory.
+    
+    TODO: add reference.
+    
+    Parameters
+    ----------
+    coords : SkyCoord
+        The pointing.
+    times : Time
+        The observatation time(s).
+    observatory : EarthLocation
+        The location of the observatory.
+    
+    Returns
+    -------
+    NDArray
+        The estimated airmass.
+    """
+    
+    altaz_frame = AltAz(obstime=times, location=observatory)
+    target_altaz = coords.transform_to(altaz_frame)
+    
+    alt_deg = target_altaz.alt.deg
+    airmass = 1 / np.sin(np.radians(alt_deg + 244 / (165 + 47 * alt_deg**1.1)))
+    
+    return airmass
 

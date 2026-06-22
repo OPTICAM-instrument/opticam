@@ -8,7 +8,7 @@ from types import FunctionType
 from typing import Any
 
 
-from opticam.utils.helpers import camera_key
+from phoptic.utils.helpers import camera_key
 
 
 
@@ -159,14 +159,14 @@ def log_psf_params(
     
     for key in psf_params.keys():
         # convert from pixels to arcsec
-        semimajor_sigma_arcsec = psf_params[key]['semimajor_sigma'] * binning_scale * rebin_factor * pixel_scales[camera_key(key)]
-        semiminor_sigma_arcsec = psf_params[key]['semiminor_sigma'] * binning_scale * rebin_factor * pixel_scales[camera_key(key)]
+        semimajor_axis_arcsec = psf_params[key]['semimajor_axis'] * binning_scale * rebin_factor * pixel_scales[camera_key(key)]
+        semiminor_axis_arcsec = psf_params[key]['semiminor_axis'] * binning_scale * rebin_factor * pixel_scales[camera_key(key)]
         
         psf_params_full[key] = {
-            'semimajor_sigma_arcsec': semimajor_sigma_arcsec,
-            'semimajor_sigma_pix': psf_params[key]['semimajor_sigma'],
-            'semiminor_sigma_arcsec': semiminor_sigma_arcsec,
-            'semiminor_sigma_pix': psf_params[key]['semiminor_sigma'],
+            'semimajor_axis_arcsec': semimajor_axis_arcsec,
+            'semimajor_axis_pix': psf_params[key]['semimajor_axis'],
+            'semiminor_axis_arcsec': semiminor_axis_arcsec,
+            'semiminor_axis_pix': psf_params[key]['semiminor_axis'],
         }
     
     # save PSF params to JSON file

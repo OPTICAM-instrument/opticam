@@ -8,8 +8,12 @@ from typing import Callable, Literal
 
 
 from astroalign import find_transform
+from astropy import units as u
+from astropy.io.fits import Header
 from astropy.table import QTable
 from matplotlib import pyplot as plt
+from matplotlib.figure import Figure
+from matplotlib.patches import Circle
 import numpy as np
 from numpy.typing import NDArray
 import pandas as pd
@@ -19,22 +23,25 @@ from tqdm.contrib.concurrent import process_map
 from tqdm import tqdm
 
 
-from opticam.utils.transforms import find_translation
-from opticam.background.global_background import BaseBackground, DefaultBackground
-from opticam.correctors import BiasCorrector, DarkNoiseCorrector, FlatFieldCorrector
-from opticam.finders import DefaultFinder, get_source_coords_from_image
-from opticam.instruments import Instrument, OPTICAM_MX
-from opticam.mef_slice import MEFSlice
-from opticam.photometers import AperturePhotometer, BasePhotometer
-from opticam.plotting.gifs import compile_gif, create_gif_frame
-from opticam.plotting.plots import plot_backgrounds, plot_background_meshes, plot_catalogs, plot_growth_curves, \
+from phoptic.utils.transforms import find_translation
+from phoptic.background.global_background import BaseBackground, DefaultBackground
+from phoptic.correctors import BiasCorrector, DarkNoiseCorrector, FlatFieldCorrector
+from phoptic.finders import DefaultFinder, get_source_coords_from_image
+from phoptic.fitting.routines import fit_psf
+from phoptic.instruments import Instrument, OPTICAM_MX
+from phoptic.mef_slice import MEFSlice
+from phoptic.noise import snr, snr_stderr, get_bias_stderr, get_dark_stderr, get_flat_stderr, get_read_stderr, \
+    get_scint_stderr, get_shot_stderr, get_sky_stderr
+from phoptic.photometers import AperturePhotometer, BasePhotometer
+from phoptic.plotting.gifs import compile_gif, create_gif_frame
+from phoptic.plotting.plots import plot_systematics, plot_background_meshes, plot_catalogs, plot_growth_curves, \
     plot_time_between_files, plot_psf, plot_rms_vs_median_flux, plot_noise, plot_snrs, plot_apertures
-from opticam.utils.batching import get_batches, get_batch_size
-from opticam.utils.constants import bar_format
-from opticam.utils.data_checks import scan_data
-from opticam.utils.fits_handlers import get_data, get_stacked_images, save_stacked_images
-from opticam.utils.helpers import delete_keys_from_nested_dict, match_dict_keys
-from opticam.utils.logging import configure_logger, log_psf_params, recursive_log
+from phoptic.utils.batching import get_batches, get_batch_size
+from phoptic.utils.constants import bar_format, counts_to_mag_factor
+from phoptic.utils.data_checks import scan_data
+from phoptic.utils.fits_handlers import get_data, get_stacked_images, save_stacked_images
+from phoptic.utils.helpers import delete_keys_from_nested_dict, match_dict_keys
+from phoptic.utils.logging import configure_logger, log_psf_params, recursive_log
 
 
 
@@ -49,7 +56,7 @@ class Reducer:
         self,
         out_directory: Path | str,
         data_directory: Path | str,
-        aperture_selector: Callable = np.median,
+        aperture_selector: Callable[[NDArray[np.float64]], NDArray[np.float64]] = np.median,
         background: BaseBackground | None = None,
         barycenter: bool = True,
         bias_corrector: BiasCorrector | None = None,
@@ -59,6 +66,7 @@ class Reducer:
         instrument: Instrument = OPTICAM_MX(),
         number_of_processors: int = cpu_count() // 2,
         rebin_factor: int = 1,
+        image_filter: Callable[[NDArray[np.float64]], NDArray[np.float64]] | None = None,
         remove_cosmic_rays: bool = False,
         show_plots: bool = True,
         threshold: float = 5,
@@ -104,6 +112,11 @@ class Reducer:
             The rebinning factor, by default 1 (no rebinning). The rebinning factor is the factor by which the image is
             rebinned in both dimensions. Rebinning can improve the detectability of faint sources and speed up
             some operations (like cosmic ray removal) at the cost of image resolution.
+        image_filter : Callable[[NDArray[np.float64]], NDArray[np.float64]] | None, optional
+            The kernel/filter to apply to images as they are opened, by default `None`. Paez+2026:
+            https://ui.adsabs.harvard.edu/abs/2026RASTI...5ag021P/abstract found that a 3x3 median filter
+            (e.g., `scipy.ndimage.median_filter()`) can be used to correct for warm pixels in long exposures (> 10 s)
+            with OPTICAM.
         remove_cosmic_rays : bool, optional
             Whether to remove cosmic rays from images, by default `False`. Cosmic rays are removed using the LACosmic
             algorithm as implemented in `astroscrappy`. Note: this can be computationally expensive, particularly for
@@ -158,6 +171,7 @@ class Reducer:
         
         self.data_directory = Path(data_directory)
         self.rebin_factor = rebin_factor
+        self.image_filter = image_filter
         self.instrument = instrument
         self.aperture_selector = aperture_selector
         self.threshold = threshold
@@ -165,6 +179,11 @@ class Reducer:
         self.barycenter = barycenter
         self.number_of_processors = number_of_processors
         self.show_plots = show_plots
+        
+        if self.barycenter:
+            self.time_key = 'BMJD'
+        else:
+            self.time_key = 'MJD'
         
         ########################################### check input data ###########################################
         
@@ -227,8 +246,8 @@ class Reducer:
         ########################################### define reference images ###########################################
         
         # define middle image as reference image for each filter
-        reference_indices = {}
-        self.reference_files = {}
+        reference_indices: dict[str, int] = {}
+        self.reference_files: dict[str, MEFSlice] = {}
         for key in self.camera_files.keys():
             reference_indices[key] = len(self.camera_files[key]) // 2
             self.reference_files[key] = self.camera_files[key][reference_indices[key]]
@@ -255,10 +274,10 @@ class Reducer:
         
         if finder is None:
             effective_image_size = 2048 // self.binning_scale // self.rebin_factor
-            npixels = 128 // (2048 // effective_image_size)**2
+            n_pixels = 128 // (2048 // effective_image_size)**2
             border_width = 2048 // self.binning_scale // self.rebin_factor // 16
-            self.finder = DefaultFinder(npixels, border_width)
-            self.logger.debug(f'Using default source finder with npixels={npixels} and border_width={border_width}.')
+            self.finder = DefaultFinder(n_pixels, border_width)
+            self.logger.debug(f'Using default source finder with n_pixels={n_pixels} and border_width={border_width}.')
         elif callable(finder):
             self.finder = finder
             self.logger.debug(f'Using custom source finder {finder.__class__.__name__} with parameters {finder.__dict__}.')
@@ -268,6 +287,19 @@ class Reducer:
         ########################################### log input params ###########################################
         
         self._log_params()
+        
+        ####################################### define convenience methods #######################################
+        
+        self.get_data: Callable[[MEFSlice], tuple[NDArray[np.float64], Header, dict[str, float | NDArray[np.float64]]]] = partial(
+            get_data,
+            instrument=self.instrument,
+            rebin_factor=self.rebin_factor,
+            image_filter=self.image_filter,
+            remove_cosmic_rays=self.remove_cosmic_rays,
+            bias_corrector=self.bias_corrector,
+            dark_corrector=self.dark_corrector,
+            flat_corrector=self.flat_corrector,
+            )
         
         ########################################### misc attributes ###########################################
         
@@ -442,6 +474,7 @@ class Reducer:
                 dark_corrector=self.dark_corrector,
                 flat_corrector=self.flat_corrector,
                 rebin_factor=self.rebin_factor,
+                image_filter=self.image_filter,
                 remove_cosmic_rays=self.remove_cosmic_rays,
                 )[0]
             
@@ -455,7 +488,7 @@ class Reducer:
                     n_sources=n_alignment_sources,
                     )
             except Exception as e:
-                self.logger.error(f'No sources detected in {key} reference image ({self.reference_files[key]}): {e}. Reducing threshold or npixels in the source finder may help.')
+                self.logger.error(f'No sources detected in {key} reference image ({self.reference_files[key]}): {e}. Reducing threshold or n_pixels in the source finder may help.')
                 continue
             
             if len(reference_coords) < n_alignment_sources and transform_type == 'translation':
@@ -485,7 +518,7 @@ class Reducer:
                 tqdm_class=tqdm,
                 )
             
-            self.transforms, self.unaligned_files, stacked_image, background = parse_alignment_results(
+            self.transforms, self.unaligned_files, stacked_image, systematics = parse_alignment_results(
                 results=results,
                 camera_files=self.camera_files[key],
                 transforms=self.transforms,
@@ -496,7 +529,7 @@ class Reducer:
             # estimate threshold for source detection
             threshold = detect_threshold(
                 stacked_image,
-                nsigma=self.threshold,
+                n_sigma=self.threshold,
                 )
             
             try:
@@ -530,11 +563,9 @@ class Reducer:
                 catalog=self.catalogs[key],
                 )
             
-            save_background(
-                out_directory=self.out_directory,
-                background=background,
+            self.save_systematics(
+                systematics=systematics,
                 key=key,
-                bmjds=self.bmjds,
                 )
         
         log_psf_params(
@@ -559,9 +590,12 @@ class Reducer:
             overwrite=overwrite,
             )
         
-        plot_backgrounds(
+        plot_systematics(
             out_directory=self.out_directory,
+            instrument=self.instrument,
+            bin_factor=self.binning_scale * self.rebin_factor,
             t_ref=self.t_ref,
+            time_key=self.time_key,
             show=self.show_plots,
             save=True,
             )
@@ -576,6 +610,133 @@ class Reducer:
             out_directory=self.out_directory,
             unaligned_files=self.unaligned_files,
             )
+
+
+    def pick_sources(
+        self,
+        percentile: float = 99.0,
+        region_size: int | None = None,
+        ):
+        """
+        Interactive plot for manually adding sources to the catalogs.
+        
+        Parameters
+        ----------
+        percentile: float, optional
+            The interval percentile for image normalisation, by default `99.0`.
+        region_size : int | None, optional
+            The size of the region used to refine source coordinates, by default `None`. If `None`, the region size is set to the image width divided by 32.
+        
+        Returns
+        -------
+        QTable
+            The table containing the new
+        """
+        
+        print(f'[OPTICAM] Warning: Reducer.add_sources() requires a compatible matplotlib backend.\n\
+            You may need to add the line, e.g., "%matploblib widget" before calling add_sources().')
+        
+        stacked_images = get_stacked_images(self.out_directory)
+        
+        fig = plot_catalogs(
+            out_directory=self.out_directory,
+            stacked_images=stacked_images,
+            catalogs=self.catalogs,
+            show=False,
+            save=False,
+            percentile=percentile,
+            return_fig=True,
+            )
+        
+        if region_size is None:
+            region_size = max(list(stacked_images.values())[0].shape) // 64
+        
+        add_source = partial(
+            self._add_source,
+            fig=fig,
+            stacked_images=stacked_images,
+            region_size=region_size,
+            )
+        
+        fig.canvas.mpl_connect('button_press_event', add_source)
+        
+        plt.show()
+
+
+    def _add_source(
+        self,
+        event: Literal['button_press_event'],
+        fig: Figure,
+        stacked_images: dict[str, NDArray],
+        region_size: int,
+        ) -> None:
+        """
+        Add a manually-picked source to the associated catalog.
+        
+        Parameters
+        ----------
+        event : Literal["button_press_event"]
+            The event.
+        fig : Figure
+            The catalog plot.
+        stacked_images : dict[str, NDArray]
+            The catalog images.
+        region_size : int | None, optional
+            The size of the region used to refine source coordinates.
+        """
+        
+        if event.inaxes is None:
+            return
+        
+        ax = event.inaxes
+        key = ax.get_title()  # get camera:filter key
+        
+        # get clicked coordinates
+        x, y = event.xdata, event.ydata
+        int_x, int_y = int(x), int(y)
+        
+        # get a small region around the clicked coordinates
+        region = stacked_images[key][int_y-region_size:int_y+region_size, int_x-region_size:int_x+region_size]
+        
+        # get peak flux coordinates in region
+        # this is the initial guess for our source position
+        y_init, x_init = np.unravel_index(np.argmax(region), region.shape)
+        
+        # get PSF coordinates in region
+        x_region, y_region, theta_rad = fit_psf(
+            image=region,
+            x_init=int(x_init),
+            y_init=int(y_init),
+            semimajor_axis=self.psf_params[key]['semimajor_axis'],
+            semiminor_axis=self.psf_params[key]['semiminor_axis'],
+            )
+        
+        # convert region coordinates to image coordinates
+        x_image = x_region + x - region_size
+        y_image = y_region + y - region_size
+        
+        # add minimally required information for chosen source to catalog
+        new_row = {
+            'x_centroid': x_image,
+            'y_centroid': y_image,
+            'orientation': np.rad2deg(theta_rad) * u.deg,
+            }
+        self.catalogs[key].add_row(new_row)
+        
+        save_catalog(
+            catalog=self.catalogs[key],
+            key=key,
+            out_directory=self.out_directory,
+            )
+        
+        patch = Circle(
+            (x_image, y_image),
+            region_size,
+            edgecolor='r',
+            facecolor='none',
+            )
+        ax.add_patch(patch)
+        fig.canvas.draw()
 
 
     def _align_batch(
@@ -619,35 +780,38 @@ class Reducer:
         Returns
         -------
         tuple[NDArray[np.float64], dict[str, list[float]], dict[str, dict[str, float]], list[tuple[str, str]]]
-            The stacked image, transforms, background results, and log messages.
+            The stacked image, transforms, systematics, and log messages.
         """
         
         stacked_image = np.zeros(reference_image_shape)  # create empty stacked image
         transforms: dict[str, list[float]] = {}
-        bkg_dict: dict[str, dict[str, float]] = {}
+        systematics_dict: dict[str, dict[str, float]] = {}
         queued_logs: list[tuple[str, str]] = []
         
         for file in batch:
-            data = get_data(
+            data, header, noise_dict = get_data(
                 file=file,
                 instrument=self.instrument,
                 bias_corrector=self.bias_corrector,
                 dark_corrector=self.dark_corrector,
                 flat_corrector=self.flat_corrector,
                 rebin_factor=self.rebin_factor,
+                image_filter=self.image_filter,
                 remove_cosmic_rays=self.remove_cosmic_rays,
-                )[0]
+                )
             
             # calculate and subtract background
             bkg = self.background(data)
             
             # identify sources
             try:
-                coords = get_source_coords_from_image(
+                coords, fwhm = get_source_coords_from_image(
                     data,
                     finder=self.finder,  # type: ignore
                     threshold=self.threshold,
                     bkg=bkg,
+                    return_fwhm=True,
+                    aperture_selector=self.aperture_selector,
                     )
             except Exception as e:
                 queued_logs.append(('error', f'No sources detected in {file.path} extension {file.ext}: {e} Skipping.'))
@@ -688,9 +852,12 @@ class Reducer:
                 continue
             
             transforms[file.key] = transform.params.tolist()
-            bkg_dict[file.key] = {
-                'Median': bkg.background_median,
-                'RMS': bkg.background_rms_median,
+            systematics_dict[file.key] = {
+                'bkg_median': bkg.background_median,
+                'bkg_rms': bkg.background_rms_median,
+                'FWHM': fwhm,
+                'airmass': self.instrument.get_airmass(header=header),
+                'rel_scint_noise': noise_dict['rel_scint_noise'],
                 }
             
             # transform and stack image
@@ -705,7 +872,7 @@ class Reducer:
                 preserve_range=True,
                 )
         
-        return stacked_image, transforms, bkg_dict, queued_logs
+        return stacked_image, transforms, systematics_dict, queued_logs
 
 
     def _valid_transform(
@@ -751,6 +918,36 @@ class Reducer:
         return True, None
 
 
+    def save_systematics(
+        self,
+        systematics: dict[str, dict[str, float]],
+        key: str,
+        ) -> None:
+        """
+        Save the systematics to a CSV file.
+        
+        Parameters
+        ----------
+        systematics : dict[Path, dict[str, float]]
+            The systematics for each file.
+        key : str
+            The camera:filter key.
+        """
+        
+        df = pd.DataFrame.from_dict(systematics, orient='index')
+        df.reset_index(inplace=True)
+        df.rename(columns={'index': 'file'}, inplace=True)
+        
+        time_df = pd.DataFrame.from_dict(self.bmjds, orient='index')
+        time_df.reset_index(inplace=True)
+        time_df.columns = ['file', self.time_key]
+        time_df.rename(columns={'index': 'file'}, inplace=True)
+        
+        merged_df = pd.merge(time_df, df, on='file', how='inner')  # merge dataframes to get corresponding times
+        merged_df.drop('file', axis=1, inplace=True)  # delete file column
+        merged_df.to_csv(os.path.join(self.out_directory, f'diag/{key}_systematics.csv'), index=False)
+
+
     def plot_background_meshes(
         self,
         save: bool = False,
@@ -765,13 +962,15 @@ class Reducer:
             Whether to save the plot, by default `False`.
         """
         
-        try:
+        catalogs = True
+        for key in self.camera_files.keys():
+            if key not in self.catalogs.keys():
+                catalogs = False
+        
+        if catalogs:
             images = get_stacked_images(self.out_directory)
-        except FileNotFoundError:
-            images = get_random_image_for_each_filter(
-                self.camera_files,
-                instrument=self.instrument,
-                )
+        else:
+            images = self.get_random_image_for_each_filter()
             
             # subtract background
             for label, image in images.items():
@@ -785,6 +984,29 @@ class Reducer:
             show=self.show_plots,
             save=save,
             )
+
+
+    def get_random_image_for_each_filter(
+        self,
+        ) -> dict[str, NDArray]:
+        """
+        Choose a random image for each filter from a dictionary.
+        
+        Returns
+        -------
+        dict[str, NDArray]
+            A dictionary containing a random image for each filter
+        """
+        
+        rng = np.random.default_rng()
+        images = {}
+        
+        for files in self.camera_files.values():
+            file = files[rng.choice(len(files))]  # choose a random file
+            key = f'{file.path.name} ext {file.ext}'
+            images[key] = self.get_data(file)[0]
+        
+        return images
 
 
     def plot_growth_curves(
@@ -871,8 +1093,8 @@ class Reducer:
         
         for key in self.catalogs.keys():
             
-            a = self.psf_params[key]['semimajor_sigma']
-            b = self.psf_params[key]['semiminor_sigma']
+            a = self.psf_params[key]['semimajor_axis']
+            b = self.psf_params[key]['semiminor_axis']
             
             for source_indx in range(len(self.catalogs[key])):
                 plot_psf(
@@ -899,47 +1121,19 @@ class Reducer:
             Whether to save the plot, by default `False`.
         """
         
+        snrs: dict[str, dict[int, float]] = {}
+        for key in self.camera_files.keys():
+            snrs[key] = self.get_snrs(
+                file=self.reference_files[key],
+                key=key,
+                )
+        
         plot_snrs(
             out_directory=self.out_directory,
-            files=match_dict_keys(self.reference_files, self.catalogs),
-            background=self.background,
-            psf_params=self.psf_params,
-            catalogs=self.catalogs,
-            instrument=self.instrument,
-            bias_corrector=self.bias_corrector,
-            dark_corrector=self.dark_corrector,
-            flat_corrector=self.flat_corrector,
+            snrs=snrs,
             show=self.show_plots,
             save=save,
         )
-
-
-    def plot_noise(
-        self,
-        save: bool = False,
-        ) -> None:
-        """
-        Plot the noise characterisation for each reference image.
-        
-        Parameters
-        ----------
-        save : bool, optional
-            Whether to save the plot, by default 'False'.
-        """
-        
-        plot_noise(
-            out_directory=self.out_directory,
-            files=match_dict_keys(self.reference_files, self.catalogs),
-            background=self.background,
-            psf_params=self.psf_params,
-            catalogs=self.catalogs,
-            instrument=self.instrument,
-            bias_corrector=self.bias_corrector,
-            dark_corrector=self.dark_corrector,
-            flat_corrector=self.flat_corrector,
-            show=self.show_plots,
-            save=save,
-            )
 
 
     def create_gifs(
@@ -985,6 +1179,7 @@ class Reducer:
                     transforms=self.transforms,
                     reference_file=self.reference_files[key],
                     rebin_factor=self.rebin_factor,
+                    image_filter=self.image_filter,
                     background=self.background,
                     instrument=self.instrument,
                     ),
@@ -1054,6 +1249,7 @@ class Reducer:
                 dark_corrector=self.dark_corrector,
                 flat_corrector=self.flat_corrector,
                 rebin_factor=self.rebin_factor,
+                image_filter=self.image_filter,
                 remove_cosmic_rays=self.remove_cosmic_rays,
                 )[0]
             
@@ -1102,8 +1298,8 @@ class Reducer:
                 self.logger.info(f'Skipping {key} since existing light curves files were found. To overwrite these files, set overwrite=True.')
                 continue
             
-            cat_coords = np.array([self.catalogs[key]["xcentroid"].value,  # type: ignore
-                                      self.catalogs[key]["ycentroid"].value],  # type:ignore
+            cat_coords = np.array([self.catalogs[key]["x_centroid"].value,  # type: ignore
+                                      self.catalogs[key]["y_centroid"].value],  # type:ignore
                                      ).T
             
             files = [file for file in self.camera_files[key] if file not in self.unaligned_files]
@@ -1167,13 +1363,14 @@ class Reducer:
             The photometry results.
         """
         
-        image, bias_var, dark_var, flat_var = get_data(
+        image, header, noise_dict = get_data(
             file=file,
             instrument=self.instrument,
             bias_corrector=self.bias_corrector,
             dark_corrector=self.dark_corrector,
             flat_corrector=self.flat_corrector,
             rebin_factor=self.rebin_factor,
+            image_filter=self.image_filter,
             remove_cosmic_rays=self.remove_cosmic_rays,
             )
         
@@ -1190,30 +1387,28 @@ class Reducer:
         image_coords = None  # assume no image coordinates by default
         if not photometer.forced:
             tbl = self.finder(image, threshold)
-            image_coords = np.array([tbl["xcentroid"].value,
-                                    tbl["ycentroid"].value],
-                                    ).T
+            image_coords = np.array([
+                tbl["x_centroid"].value,
+                tbl["y_centroid"].value,
+                ]).T
         
         # apply transform to catalogue coordinates
         transformed_cat_coords = matrix_transform(cat_coords, self.transforms[file.key])
         
         results = photometer.compute(
             image=image,
-            bias_var=bias_var,
-            dark_var=dark_var,
-            flat_var=flat_var,
+            bias_var=noise_dict['bias_var'],
+            dark_var=noise_dict['dark_var'],
+            flat_var=noise_dict['flat_var'],
             background_rms=background_rms,
             cat_coords=transformed_cat_coords,
             image_coords=image_coords,
             psf_params=self.psf_params[key],
             read_noise=self.instrument.get_read_noise(file=file),
+            rel_scint_noise=noise_dict['rel_scint_noise'],
             )
         
-        # add time stamp
-        if self.barycenter:
-            results['BMJD'] = self.bmjds[file.key]
-        else:
-            results['MJD'] = self.bmjds[file.key]
+        results[self.time_key] = self.bmjds[file.key]
         
         return results
 
@@ -1243,6 +1438,231 @@ class Reducer:
         )
 
 
+    def plot_noise(
+        self,
+        save: bool = False,
+        ) -> None:
+        """
+        Plot the noise characterisation for each reference image.
+        
+        Parameters
+        ----------
+        save : bool, optional
+            Whether to save the plot, by default 'False'.
+        """
+        
+        noise_dicts = {}
+        
+        for key, file in self.reference_files.items():
+            noise_dicts[key] = self._characterise_noise(
+                file=file,
+                key=key,
+                )
+        
+        plot_noise(
+            out_directory=self.out_directory,
+            noise_dicts=noise_dicts,
+            show=self.show_plots,
+            save=save,
+            )
+
+
+    def _get_noise_params(
+        self,
+        file: MEFSlice,
+        key: str,
+        ) -> tuple[NDArray[np.int64], NDArray[np.float64], NDArray[np.float64], float, float, float, float, float, NDArray[np.float64]]:
+        """
+        Get the noise values of a science image.
+        
+        Parameters
+        ----------
+        file : MEFSlice
+            The science image file.
+        key : str
+            The camera:filter key.
+        
+        Returns
+        -------
+        tuple[NDArray[np.int64], NDArray[np.float64], NDArray[np.float64], float, float, float, float, float, NDArray[np.float64]]
+            The source IDs, fluxes, flux errors, number of aperture pixels, backgorund counts/pixel, bias variance, dark
+            variance, flat-field variance, and scintillation noise.
+        """
+        
+        coords = np.asarray([self.catalogs[key]['x_centroid'], self.catalogs[key]['y_centroid']]).T
+        
+        img, header, noise_dict = get_data(
+            file=file,
+            instrument=self.instrument,
+            image_filter=self.image_filter,
+            rebin_factor=self.rebin_factor,
+            bias_corrector=self.bias_corrector,
+            dark_corrector=self.dark_corrector,
+            flat_corrector=self.flat_corrector,
+            remove_cosmic_rays=False,
+            )
+        
+        # global background
+        bkg = self.background(img)
+        n_sky = float(bkg.background_rms_median**2)  # background variance
+        
+        # subtract background from image
+        img_clean = img - bkg.background
+        
+        # perform photometry
+        phot = AperturePhotometer()
+        phot_results = phot.compute(
+            image=img_clean,
+            bias_var=noise_dict['bias_var'],
+            dark_var=noise_dict['dark_var'],
+            flat_var=noise_dict['flat_var'],
+            background_rms=np.sqrt(n_sky),
+            cat_coords=coords,
+            image_coords=coords,
+            psf_params=self.psf_params[key],
+            read_noise=self.instrument.get_read_noise(header=header),
+            rel_scint_noise=noise_dict['rel_scint_noise'],
+            )
+        
+        # get the number of pixels in the aperture
+        N_pix = phot.get_aperture_area(psf_params=self.psf_params[key])
+        
+        fluxes = np.array(phot_results['flux'])
+        flux_errs = np.array(phot_results['flux_err'])
+        source_ids = np.arange(len(self.catalogs[key])) + 1
+        scint_noise = noise_dict['rel_scint_noise'] * fluxes
+        
+        # mask unphysical flux values
+        mask = fluxes > 1.
+        
+        return source_ids[mask], fluxes[mask], flux_errs[mask], N_pix, n_sky, float(np.median(noise_dict['bias_var'])), float(np.median(noise_dict['dark_var'])), float(np.median(noise_dict['flat_var'])), scint_noise
+
+
+    def get_snrs(
+        self,
+        file: MEFSlice,
+        key: str,
+        ) -> dict[int, float]:
+        """
+        Get the S/N ratios for the cataloged sources in a science image.
+        
+        Parameters
+        ----------
+        file : MEFSlice
+            The science image file.
+        key : str
+            The camera:filter key.
+        
+        Returns
+        -------
+        dict[int, float]
+            The source ID (key) and S/N (value) for each source.
+        """
+        
+        source_ids, fluxes, flux_errs, N_pix, n_sky, bias_var, dark_var, flat_var, scint_noise = self._get_noise_params(
+            key=key,
+            file=file,
+        )
+        
+        snrs = np.asarray(
+            snr(
+                N_source=fluxes,
+                N_pix=N_pix,
+                n_sky=n_sky,
+                bias_var=bias_var,
+                dark_var=dark_var,
+                flat_var=flat_var,
+                read_noise=self.instrument.get_read_noise(file=file),
+                scint_noise=scint_noise,
+                )
+            )
+        
+        results = {source_id: round(snr, 1) for source_id, snr in zip(source_ids, snrs)}
+        
+        return results
+
+
+    def _characterise_noise(
+        self,
+        file: MEFSlice,
+        key: str,
+        ) -> dict[str, NDArray]:
+        """
+        Characterise the expected noise from an image and compare it to the measured noise for a number of cataloged 
+        sources.
+        
+        Parameters
+        ----------
+        file : MEFSlice
+            The science image file.
+        key : str
+            The camera:filter key.
+        
+        Returns
+        -------
+        dict[str, NDArray]
+            The noies properties.
+        """
+        
+        header = file.get_header()
+        
+        read_noise = self.instrument.get_read_noise(header=header)
+        rel_scint_noise = self.instrument.get_relative_scintillation_noise(header=header)
+        
+        source_ids, fluxes, flux_errs, N_pix, n_sky, bias_var, dark_var, flat_var, scint_noise = self._get_noise_params(
+            file=file,
+            key=key,
+        )
+        
+        N_source = np.logspace(
+            np.log10(np.min(fluxes) / 1.5),
+            np.log10(np.max(fluxes) * 1.5),
+            100,
+            )
+        
+        results = {}
+        
+        results['model_mags'] = -2.5 * np.log10(N_source)
+        results['effective_noise'] = snr_stderr(
+            N_source=N_source,
+            N_pix=N_pix,
+            n_sky=n_sky,
+            bias_var=bias_var,
+            dark_var=dark_var,
+            flat_var=flat_var,
+            read_noise=read_noise,
+            rel_scint_noise=rel_scint_noise,
+            )
+        results['sky_noise'] = get_sky_stderr(
+            N_source=N_source,
+            N_pix=N_pix,
+            n_sky=n_sky,
+            )
+        results['shot_noise'] = get_shot_stderr(N_source=N_source)
+        results['bias'] = get_bias_stderr(
+            N_source=N_source,
+            N_pix=N_pix, bias_var=bias_var)
+        results['dark_noise'] = get_dark_stderr(N_source, N_pix, dark_var)
+        results['flat'] = get_flat_stderr(N_source, N_pix, flat_var)
+        results['read_noise'] = get_read_stderr(N_source, N_pix, read_noise=read_noise)
+        results['scint_noise'] = get_scint_stderr(N_source=N_source, rel_scint_noise=rel_scint_noise)
+        
+        results['measured_mags'] = -2.5 * np.log10(fluxes)
+        results['measured_noise'] = counts_to_mag_factor * flux_errs / fluxes
+        results['expected_measured_noise'] = snr_stderr(
+            N_source=fluxes,
+            N_pix=N_pix,
+            n_sky=n_sky,
+            bias_var=bias_var,
+            dark_var=dark_var,
+            flat_var=flat_var,
+            read_noise=read_noise,
+            rel_scint_noise=rel_scint_noise,
+            )
+        
+        return results
+
+
 
 ################### for a clearner UI, the following functions are intentionally not Reducer methods ###################
 
@@ -1267,13 +1687,13 @@ def set_psf_params(
         The PSF parameters.
     """
     
-    semimajor_sigma_pix = aperture_selector(catalog['semimajor_sigma'].value)  # type: ignore
-    semiminor_sigma_pix = aperture_selector(catalog['semiminor_sigma'].value)  # type: ignore
+    semimajor_axis_pix = aperture_selector(catalog['semimajor_axis'].value)  # type: ignore
+    semiminor_axis_pix = aperture_selector(catalog['semiminor_axis'].value)  # type: ignore
     orientation = aperture_selector(catalog['orientation'].value)  # type: ignore
     
     return {
-        'semimajor_sigma': semimajor_sigma_pix,
-        'semiminor_sigma': semiminor_sigma_pix,
+        'semimajor_axis': semimajor_axis_pix,
+        'semiminor_axis': semiminor_axis_pix,
         'orientation': orientation,
     }
 
@@ -1304,22 +1724,21 @@ def parse_alignment_results(
     Returns
     -------
     tuple[dict[str, list[float]], list[str], NDArray, dict[str, float], dict[str, float]]
-        The updated transforms, unaligned files, stacked image, median background values and median background RMS
-        values.
+        The updated transforms, unaligned files, stacked image, and systematics.
     """
     
     key_transforms: dict[str, list[float]] = {}
     key_unaligned_files: list[MEFSlice] = []
-    key_background: dict[str, dict[str, float]] = {}
+    key_systematics: dict[str, dict[str, float]] = {}
     queued_logs: list[tuple[str, str]] = []
     
     # unpack results
-    batch_stacked_images, batch_transforms, batch_backgrounds, batch_queued_logs = zip(*results)
+    batch_stacked_images, batch_transforms, batch_systematics, batch_queued_logs = zip(*results)
     
     # combine results
     for i in range(len(batch_stacked_images)):
         key_transforms.update(batch_transforms[i])
-        key_background.update(batch_backgrounds[i])
+        key_systematics.update(batch_systematics[i])
         queued_logs += batch_queued_logs[i]
     
     # write log messages
@@ -1342,7 +1761,7 @@ def parse_alignment_results(
     logger.info(f'[OPTICAM] {len(key_transforms)} image(s) aligned.')
     logger.info(f'[OPTICAM] {len(key_unaligned_files)} image(s) could not be aligned.')
     
-    return transforms, unaligned_files, stacked_image, key_background
+    return transforms, unaligned_files, stacked_image, key_systematics
 
 
 def write_queued_logs(
@@ -1382,40 +1801,6 @@ def write_queued_logs(
                 raise ValueError(f'[OPTICAM] Unrecognised log level {level}.')
 
 
-def save_background(
-    out_directory: Path,
-    background: dict[str, dict[str, float]],
-    key: str,
-    bmjds: dict[str, float],
-    ) -> None:
-    """
-    Save the median background and its RMS to a CSV file.
-    
-    Parameters
-    ----------
-    out_directory : Path
-        The output directory.
-    background : dict[Path, dict[str, float]]
-        The background values for each file.
-    key : str
-        The camera:filter key.
-    bmjds : dict[Path, float]
-        The BMJD values for each file {file path}.
-    """
-    
-    df = pd.DataFrame.from_dict(background, orient='index').reset_index()
-    df.columns = ['file', 'median', 'rms']
-    
-    time_df = pd.DataFrame.from_dict(bmjds, orient='index').reset_index()
-    time_df.columns = ['file', 'BMJD']
-    
-    merged_df = pd.merge(df, time_df, on='file', how='inner')  # merge dataframes to get corresponding times
-    merged_df = merged_df.drop('file', axis=1)  # delete file column
-    merged_df = merged_df.reindex(columns=['BMJD', 'median', 'rms'])  # reorder columns
-    
-    merged_df.to_csv(os.path.join(out_directory, f'diag/{key}_background.csv'), index=False)
-
-
 def save_unaligned_files(
     out_directory: Path,
     unaligned_files: list[MEFSlice],
@@ -1435,42 +1820,6 @@ def save_unaligned_files(
         with open(os.path.join(out_directory, "diag/unaligned_files.txt"), "w") as unaligned_file:
             for file in unaligned_files:
                 unaligned_file.write(str(file.key) + "\n")
-
-
-def get_random_image_for_each_filter(
-    camera_files: dict[str, list[MEFSlice]],
-    instrument: Instrument,
-    ) -> dict[str, NDArray]:
-    """
-    Choose a random image for each filter from a dictionary.
-    
-    Parameters
-    ----------
-    camera_files : dict[str, list[Path]]
-        The filters and corresponding files in the data directory {filter: [paths to images]}.
-    instrument : Instrument
-        The instrument.
-    
-    Returns
-    -------
-    dict[str, NDArray]
-        A dictionary containing a random file for each filter
-    """
-    
-    rng = np.random.default_rng()
-    images = {}
-    
-    for files in camera_files.values():
-        file = files[rng.choice(len(files))]  # choose a random file
-        file_name = file.path.name
-        images[file_name] = get_data(
-            file=file,
-            instrument=instrument,
-            rebin_factor=1,
-            remove_cosmic_rays=False,
-            )[0]
-    
-    return images
 
 
 def create_targets_dict(
