@@ -22,7 +22,7 @@ extensions = [
     'nbsphinx',
 ]
 autoapi_dirs = [
-    "../opticam"
+    "../phoptic"
 ]
 autodoc_typehints = 'description'
 
